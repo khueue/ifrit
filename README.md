@@ -6,6 +6,8 @@
   A CLI tool that wraps Docker Compose to manage multiple subprojects with their own compose files, allowing them to be started/stopped on demand while sharing a common network.
 </p>
 
+![demo](assets/demo.gif)
+
 ## Features
 
 - 🐳 Manage multiple Docker Compose projects from a single configuration

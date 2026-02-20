@@ -92,3 +92,7 @@ build-all: clean
 	GOOS=darwin GOARCH=arm64 $(GORELEASE) -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64
 	GOOS=windows GOARCH=amd64 $(GORELEASE) -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe
 	@ echo "Built binaries in $(BUILD_DIR)/"
+
+video:
+	# brew install vhs
+	vhs assets/demo.tape
