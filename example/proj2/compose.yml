@@ -1,0 +1,21 @@
+services:
+  dev:
+    init: true
+    build:
+      context: ./
+      dockerfile: dev.Dockerfile
+    volumes:
+      - ./:/workspaces/workdir
+    working_dir: /workspaces/workdir
+    command: sleep infinity
+
+  app:
+    init: true
+    image: nginx:alpine
+    ports:
+      - "8082:80"
+
+networks:
+  default:
+    external: true
+    name: ${IFRIT_SHARED_NETWORK}

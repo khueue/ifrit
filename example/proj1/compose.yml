@@ -1,0 +1,15 @@
+services:
+  dev:
+    init: true
+    build:
+      context: ./
+      dockerfile: dev.Dockerfile
+    volumes:
+      - ./:/workspaces/workdir
+    working_dir: /workspaces/workdir
+    command: sleep infinity
+
+networks:
+  default:
+    external: true
+    name: ${IFRIT_SHARED_NETWORK}

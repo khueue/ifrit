@@ -1,0 +1,7 @@
+name_prefix: ifrit
+shared_network: ifrit
+projects:
+  proj1:
+    path: ./example/proj1
+  proj2:
+    path: ./example/proj2
