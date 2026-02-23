@@ -55,6 +55,9 @@ The project must be running for this command to work.`,
   # Execute a command in the container
   ifrit shell backend api -- ls -al
 
+  # Run a compound shell expression
+  ifrit shell backend api -- "ls && echo done"
+
   # Run command non-interactively (for scripts)
   ifrit shell --interactive=false backend api -- env > output.txt`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -119,6 +122,10 @@ The project must be running for this command to work.`,
 		if dashIndex == -1 || len(commandArgs) == 0 {
 			// No "--" provided, or nothing after it; open an interactive shell.
 			command = []string{"/bin/bash"}
+		} else if len(commandArgs) == 1 {
+			// Single arg: wrap with sh -c so that shell expressions like
+			// "ls && echo done" are interpreted correctly.
+			command = []string{"sh", "-c", commandArgs[0]}
 		} else {
 			command = commandArgs
 		}
