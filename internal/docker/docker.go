@@ -75,18 +75,18 @@ func (m *Manager) ensureOverrideFile() (string, error) {
     name: %s
 `, m.config.SharedNetwork)
 
-	f, err := os.CreateTemp("", "ifrit-network-override-*.yml")
-	if err != nil {
-		return "", fmt.Errorf("failed to create network override file: %w", err)
-	}
-	defer f.Close()
+	// Use a deterministic path so we reuse the same file across runs.
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("ifrit-network-override-%s.yml", m.config.SharedNetwork))
 
-	if _, err := f.WriteString(content); err != nil {
-		os.Remove(f.Name())
-		return "", fmt.Errorf("failed to write network override: %w", err)
+	// Skip writing if the file already has the correct content.
+	existing, err := os.ReadFile(path)
+	if err != nil || string(existing) != content {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			return "", fmt.Errorf("failed to write network override file: %w", err)
+		}
 	}
 
-	m.overrideFile = f.Name()
+	m.overrideFile = path
 	return m.overrideFile, nil
 }
 
