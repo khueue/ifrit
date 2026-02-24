@@ -22,9 +22,11 @@ var initCmd = &cobra.Command{
 		}
 
 		// Create sample config.
+		implicitNetworking := true
 		sampleConfig := &config.Config{
-			NamePrefix:    "myapp",
-			SharedNetwork: "myapp_shared",
+			NamePrefix:         "myapp",
+			SharedNetwork:      "myapp_shared",
+			ImplicitNetworking: &implicitNetworking,
 			Projects: map[string]config.Project{
 				"backend": {
 					Path:         "./backend",
@@ -48,12 +50,10 @@ var initCmd = &cobra.Command{
 		ui.Printf("Created %s\n", configFile)
 		ui.Println("\nNext steps:")
 		ui.Println("1. Edit ifrit.yml to configure your projects")
-		ui.Println("2. Make sure your compose.yml files use the shared network:")
-		ui.Println("   networks:")
-		ui.Println("     default:")
-		ui.Println("       external: true")
-		ui.Println("       name: ${IFRIT_SHARED_NETWORK}")
-		ui.Println("3. Run 'ifrit up' to start all projects")
+		ui.Println("2. Run 'ifrit up' to start all projects")
+		ui.Println("")
+		ui.Println("Note: implicit_networking is enabled, so your compose.yml files")
+		ui.Println("don't need a shared network block.")
 
 		return nil
 	},

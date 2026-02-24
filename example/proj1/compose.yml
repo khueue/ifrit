@@ -9,7 +9,8 @@ services:
     working_dir: /workspaces/workdir
     command: sleep infinity
 
-networks:
-  default:
-    external: true
-    name: ${IFRIT_SHARED_NETWORK}
+# Necessary without "implicit_networking: true":
+# networks:
+#   default:
+#     external: true
+#     name: ${IFRIT_SHARED_NETWORK}

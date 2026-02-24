@@ -1,5 +1,6 @@
 name_prefix: ifrit
 shared_network: ifrit
+implicit_networking: true
 projects:
   proj1:
     path: ./example/proj1

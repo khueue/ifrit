@@ -54,6 +54,7 @@ go install github.com/khueue/ifrit@latest
    ```yaml
    name_prefix: myapp
    shared_network: myapp_shared
+   implicit_networking: true
 
    projects:
      database:
@@ -66,25 +67,12 @@ go install github.com/khueue/ifrit@latest
        path: ./frontend
    ```
 
-3. **Update your `compose.yml` files** to use the shared network:
-   ```yaml
-   services:
-     myservice:
-       image: myimage:latest
-       # ... other service configuration ...
-
-   networks:
-     default:
-       external: true
-       name: ${IFRIT_SHARED_NETWORK}
-   ```
-
-4. **Start all projects**:
+3. **Start all projects**:
    ```bash
    ifrit up
    ```
 
-5. **View status**:
+4. **View status**:
    ```bash
    ifrit status
    ```
@@ -99,6 +87,9 @@ name_prefix: myapp
 
 # Shared Docker network name
 shared_network: myapp_shared
+
+# Automatically inject the shared network into all compose projects
+implicit_networking: true
 
 # Define your projects
 projects:
@@ -118,6 +109,7 @@ projects:
 
 - **name_prefix** (required): Base name used to prefix all Docker Compose project names
 - **shared_network** (required): Name of the shared Docker network
+- **implicit_networking** (required): When `true`, Ifrit automatically injects the shared network into all compose projects. When `false`, you must add the network block to each `compose.yml` manually (see below).
 - **projects**: Map of project configurations
   - **path** (required): Relative or absolute path to the project directory
   - **compose_files** (optional): List of compose files (defaults to `[compose.yml]`)
@@ -212,7 +204,7 @@ ifrit shell --help
 
 1. **Shared Network**: Ifrit creates a Docker bridge network that all projects join. The network is created automatically on `ifrit up` and removed on `ifrit down`.
 2. **Project Isolation**: Each project runs as a separate Docker Compose project with its own prefix (`{name_prefix}_{project_key}`)
-3. **Environment Variables**: The `IFRIT_SHARED_NETWORK` variable is automatically passed to all `docker compose` commands
+3. **Networking**: When `implicit_networking: true`, Ifrit generates a compose override file and passes it as an extra `-f` flag, so your compose files don't need any network configuration. When `false`, the `IFRIT_SHARED_NETWORK` environment variable is passed to all `docker compose` commands for use in your compose files.
 
 ## Example Project Structure
 
@@ -234,7 +226,7 @@ myapp/
 
 ### Example Docker Compose File
 
-**backend/compose.yml**:
+**backend/compose.yml** (with `implicit_networking: true` — no network block needed):
 ```yaml
 services:
   api:
@@ -254,7 +246,10 @@ services:
 
 volumes:
   db_data:
+```
 
+If `implicit_networking` is `false`, add the shared network to each compose file:
+```yaml
 networks:
   default:
     external: true
@@ -464,7 +459,12 @@ docker network rm myapp_shared
 
 ### Services can't communicate
 
-Verify all `compose.yml` files use the external network:
+Either enable implicit networking in `ifrit.yml`:
+```yaml
+implicit_networking: true
+```
+
+Or verify all `compose.yml` files use the external network manually:
 ```yaml
 networks:
   default:

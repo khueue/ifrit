@@ -12,9 +12,10 @@ import (
 
 // Config represents the ifrit.yml configuration file.
 type Config struct {
-	NamePrefix    string             `yaml:"name_prefix"`
-	SharedNetwork string             `yaml:"shared_network"`
-	Projects      map[string]Project `yaml:"projects"`
+	NamePrefix         string             `yaml:"name_prefix"`
+	SharedNetwork      string             `yaml:"shared_network"`
+	ImplicitNetworking *bool              `yaml:"implicit_networking"`
+	Projects           map[string]Project `yaml:"projects"`
 }
 
 // Project represents a Docker Compose subproject.
@@ -66,6 +67,10 @@ func Load(configPath string) (*Config, error) {
 
 	if cfg.SharedNetwork == "" {
 		return nil, fmt.Errorf("shared_network is required in config")
+	}
+
+	if cfg.ImplicitNetworking == nil {
+		return nil, fmt.Errorf("implicit_networking is required in config")
 	}
 
 	for name, project := range cfg.Projects {

@@ -22,6 +22,7 @@ type Manager struct {
 	config          *config.Config
 	verbose         bool
 	networkVerified bool
+	overrideFile    string // temp compose override for implicit networking
 }
 
 // NewManager creates a new Docker manager.
@@ -60,11 +61,42 @@ func (m *Manager) composeEnv() []string {
 	return env
 }
 
+// ensureOverrideFile creates (once) a temp compose override file that sets the
+// default network to the shared external network. The file lives in the OS temp
+// dir and is cleaned up automatically on reboot.
+func (m *Manager) ensureOverrideFile() (string, error) {
+	if m.overrideFile != "" {
+		return m.overrideFile, nil
+	}
+
+	content := fmt.Sprintf(`networks:
+  default:
+    external: true
+    name: %s
+`, m.config.SharedNetwork)
+
+	f, err := os.CreateTemp("", "ifrit-network-override-*.yml")
+	if err != nil {
+		return "", fmt.Errorf("failed to create network override file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(content); err != nil {
+		os.Remove(f.Name())
+		return "", fmt.Errorf("failed to write network override: %w", err)
+	}
+
+	m.overrideFile = f.Name()
+	return m.overrideFile, nil
+}
+
 // composeArgs returns the common prefix args for a compose invocation:
 //
 //	--file <file1> --file <file2> ... --project-name <project_prefix>_<name>
 //
 // It also validates that every compose file exists on disk.
+// When implicit networking is enabled, a generated override file is appended
+// last so that the default network is set to the shared external network.
 func (m *Manager) composeArgs(project config.Project, projectName string) ([]string, error) {
 	var args []string
 	for _, cf := range project.ComposeFiles {
@@ -74,6 +106,15 @@ func (m *Manager) composeArgs(project config.Project, projectName string) ([]str
 		}
 		args = append(args, "--file", composePath)
 	}
+
+	if *m.config.ImplicitNetworking {
+		overridePath, err := m.ensureOverrideFile()
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--file", overridePath)
+	}
+
 	args = append(args, "--project-name", fmt.Sprintf("%s_%s", m.config.NamePrefix, projectName))
 	return args, nil
 }
