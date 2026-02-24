@@ -9,6 +9,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// SilentExitError signals that the process should exit with the given code
+// without printing any additional error message. This is used by commands
+// like "shell" where the executed command's own output is sufficient.
+type SilentExitError struct {
+	Code int
+}
+
+func (e *SilentExitError) Error() string {
+	return fmt.Sprintf("exit status %d", e.Code)
+}
+
 const version = "0.1.0"
 
 var (

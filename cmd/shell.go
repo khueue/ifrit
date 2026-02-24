@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"os/exec"
 	"slices"
 	"strings"
 
@@ -130,7 +132,13 @@ The project must be running for this command to work.`,
 			command = commandArgs
 		}
 
-		return manager.ComposeExec(projectName, serviceName, command, shellInteractive)
+		if err := manager.ComposeExec(projectName, serviceName, command, shellInteractive); err != nil {
+			if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+				return &SilentExitError{Code: exitErr.ExitCode()}
+			}
+			return err
+		}
+		return nil
 	},
 }
 
