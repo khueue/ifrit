@@ -137,7 +137,7 @@ ifrit up
 ifrit up backend frontend
 
 # Force-recreate all containers from scratch
-ifrit up --fresh backend
+ifrit up --recreate backend
 
 # Stop all projects (also removes the shared network)
 ifrit down

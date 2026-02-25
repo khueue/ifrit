@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	upAll   bool
-	upFresh bool
+	upAll      bool
+	upRecreate bool
 )
 
 var upCmd = &cobra.Command{
@@ -17,7 +17,7 @@ var upCmd = &cobra.Command{
 starts all projects.
 
 By default, images are rebuilt and orphan containers are removed.
-Use --fresh to also force-recreate all containers and their dependencies.`,
+Use --recreate to also force-recreate all containers and their dependencies.`,
 	Example: `  # Start all projects
   ifrit up
 
@@ -25,19 +25,19 @@ Use --fresh to also force-recreate all containers and their dependencies.`,
   ifrit up backend frontend
 
   # Force-recreate all containers from scratch
-  ifrit up --fresh backend`,
+  ifrit up --recreate backend`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 || upAll {
 			if len(cfg.GetProjects()) == 0 {
 				ui.Println("No projects defined.")
 				return nil
 			}
-			return manager.UpAll(upFresh)
+			return manager.UpAll(upRecreate)
 		}
 
 		// Start specific projects.
 		for _, projectName := range args {
-			if err := manager.ComposeUp(projectName, upFresh); err != nil {
+			if err := manager.ComposeUp(projectName, upRecreate); err != nil {
 				return err
 			}
 		}
@@ -48,6 +48,6 @@ Use --fresh to also force-recreate all containers and their dependencies.`,
 
 func init() {
 	upCmd.Flags().BoolVarP(&upAll, "all", "a", false, "Start all projects")
-	upCmd.Flags().BoolVar(&upFresh, "fresh", false, "Force-recreate all containers and their dependencies")
+	upCmd.Flags().BoolVar(&upRecreate, "recreate", false, "Force-recreate all containers and their dependencies")
 	rootCmd.AddCommand(upCmd)
 }
