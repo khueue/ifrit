@@ -78,6 +78,12 @@ tidy:
 	@ echo "Tidying dependencies..."
 	$(GOMOD) tidy
 
+# Upgrade all dependencies (including major versions)
+upgrade:
+	@ echo "Upgrading dependencies..."
+	$(GOGET) -u ./...
+	$(GOMOD) tidy
+
 # Run the application (useful for development)
 run: build
 	@ $(BUILD_DIR)/$(BINARY_NAME)
