@@ -20,7 +20,7 @@ func (e *SilentExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 var (
 	configPath string
@@ -37,9 +37,11 @@ with their own compose files, allowing them to be started/stopped on demand
 while sharing a common network.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Skip loading config for commands that don't need it.
+		// "__complete" is cobra's internal command for shell completion;
+		// without it, completions break when ifrit.yml is missing or invalid.
 		for c := cmd; c != nil; c = c.Parent() {
 			switch c.Name() {
-			case "init", "version", "completion":
+			case "init", "version", "completion", "__complete":
 				return nil
 			}
 		}
