@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v4"
 )
 
 // Config represents the ifrit.yml configuration file.
@@ -48,7 +48,7 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := yaml.Load(data, &cfg, yaml.WithKnownFields()); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
@@ -94,7 +94,7 @@ func (c *Config) Save(configPath string) error {
 		configPath = ConfigFileName
 	}
 
-	data, err := yaml.Marshal(c)
+	data, err := yaml.Dump(c, yaml.V4)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
