@@ -313,7 +313,7 @@ func (m *Model) initViewports() {
 	vpWidth := m.width
 	for i := range m.tabs {
 		m.tabs[i].viewport = viewport.New(vpWidth, vpHeight)
-		m.tabs[i].viewport.MouseWheelEnabled = true
+		m.tabs[i].viewport.MouseWheelEnabled = false
 		content := strings.Join(m.tabs[i].lines, "\n")
 		m.tabs[i].viewport.SetContent(content)
 		if m.tabs[i].follow {
@@ -396,7 +396,7 @@ func Run(projectNames []string, builder CmdBuilder) error {
 		return err
 	}
 
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
