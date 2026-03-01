@@ -180,9 +180,17 @@ ifrit shell database postgres -- psql -U myuser -c "SELECT version()"
 # Check environment variables
 ifrit shell backend api -- env
 
-# Run command non-interactively (for scripting)
+# Pipe output (interactive mode is auto-detected)
+ifrit shell backend api -- env | grep PATH
+
+# Force interactive mode on/off
 ifrit shell --interactive=false backend api -- env > output.txt
+ifrit shell --interactive=true backend api -- top
 ```
+
+> **Note:** Interactive mode (TTY + stdin) is auto-detected based on whether
+> your terminal is interactive. When piping or redirecting, it automatically
+> switches to non-interactive mode. Use `--interactive` to override.
 
 ### Other
 

@@ -3,15 +3,21 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
 
 	"github.com/khueue/ifrit/internal/ui"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
 var shellInteractive bool
+
+func isTerminal() bool {
+	return isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
+}
 
 func printShellUsageHint() {
 	projects := cfg.GetProjects()
@@ -50,7 +56,10 @@ var shellCmd = &cobra.Command{
 If no command is specified, opens an interactive shell (/bin/bash or /bin/sh).
 If a command is provided after '--', executes that command in the container.
 
-The project must be running for this command to work.`,
+If the service is not already running, it will be started automatically.
+
+By default, interactive mode is auto-detected based on whether stdin and stdout
+are connected to a terminal. Use --interactive to override this behavior.`,
 	Example: `  # Open an interactive shell in the backend api service
   ifrit shell backend api
 
@@ -60,9 +69,19 @@ The project must be running for this command to work.`,
   # Run a compound shell expression
   ifrit shell backend api -- "ls && echo done"
 
-  # Run command non-interactively (for scripts)
-  ifrit shell --interactive=false backend api -- env > output.txt`,
+  # Pipe output (auto-detects non-interactive mode)
+  ifrit shell backend api -- env | grep PATH
+
+  # Force interactive mode on/off
+  ifrit shell --interactive=false backend api -- env > output.txt
+  ifrit shell --interactive=true backend api -- top`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// If the user didn't explicitly set --interactive, auto-detect
+		// based on whether stdin/stdout are terminals.
+		if !cmd.Flags().Changed("interactive") {
+			shellInteractive = isTerminal()
+		}
+
 		// Because SetInterspersed(false) is used, cobra/pflag does not
 		// process "--" itself, so we parse it manually from the args slice.
 		dashIndex := slices.Index(args, "--")
@@ -143,7 +162,7 @@ The project must be running for this command to work.`,
 }
 
 func init() {
-	shellCmd.Flags().BoolVarP(&shellInteractive, "interactive", "i", true, "Run in interactive mode with TTY")
+	shellCmd.Flags().BoolVarP(&shellInteractive, "interactive", "i", true, "Run in interactive mode with TTY (auto-detected by default)")
 	shellCmd.Flags().SetInterspersed(false)
 	rootCmd.AddCommand(shellCmd)
 }
