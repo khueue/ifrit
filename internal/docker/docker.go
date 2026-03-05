@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/khueue/ifrit/internal/config"
@@ -14,7 +15,7 @@ import (
 
 // composeCommand creates an exec.Cmd for "docker compose" with the given args.
 func composeCommand(args ...string) *exec.Cmd {
-	return exec.Command("docker", append([]string{"compose"}, args...)...)
+	return exec.Command("docker", slices.Concat([]string{"compose"}, args)...)
 }
 
 // Manager handles Docker Compose operations.
