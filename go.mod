@@ -2,7 +2,7 @@ module github.com/khueue/ifrit
 
 // UPGRADE_POINT.
 // https://go.dev/doc/devel/release
-go 1.26.0
+go 1.26.1
 
 tool (
 	golang.org/x/tools/cmd/goimports
