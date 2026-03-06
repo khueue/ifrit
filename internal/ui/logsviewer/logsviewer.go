@@ -15,36 +15,26 @@ import (
 // maxLines is the maximum number of log lines kept per tab.
 const maxLines = 10000
 
+// --- Color palette ----------------------------------------------------------
+
+// groupColors is a palette of visually distinct ANSI 256 colors assigned to
+// project groups so that tabs belonging to the same project share a color.
+var groupColors = []lipgloss.Color{
+	lipgloss.Color("215"), // orange
+	lipgloss.Color("117"), // blue
+	lipgloss.Color("156"), // green
+	lipgloss.Color("212"), // pink
+	lipgloss.Color("223"), // peach
+	lipgloss.Color("153"), // light blue
+	lipgloss.Color("180"), // tan
+	lipgloss.Color("183"), // lavender
+	lipgloss.Color("114"), // lime
+	lipgloss.Color("210"), // salmon
+}
+
 // --- Styles ----------------------------------------------------------------
 
 var (
-	activeTabStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("215")).
-			Border(lipgloss.NormalBorder()).
-			BorderBottom(false).
-			BorderForeground(lipgloss.Color("215")).
-			Padding(0, 2)
-
-	inactiveTabStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("245")).
-				Border(lipgloss.NormalBorder()).
-				BorderBottom(false).
-				BorderForeground(lipgloss.Color("240")).
-				Padding(0, 2)
-
-	unreadTabStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("230")).
-			Border(lipgloss.NormalBorder()).
-			BorderBottom(false).
-			BorderForeground(lipgloss.Color("230")).
-			Padding(0, 2)
-
-	unreadDotStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("82")).
-			Bold(true)
-
 	tabBarStyle = lipgloss.NewStyle().
 			BorderBottom(true).
 			BorderStyle(lipgloss.NormalBorder()).
@@ -56,7 +46,43 @@ var (
 	titleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("215")).
 			Bold(true)
+
+	unreadDotStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("82")).
+			Bold(true)
 )
+
+// activeStyle returns the tab style for the active tab with the given group color.
+func activeStyle(color lipgloss.Color) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(color).
+		Border(lipgloss.NormalBorder()).
+		BorderBottom(false).
+		BorderForeground(color).
+		Padding(0, 2)
+}
+
+// inactiveStyle returns the tab style for an inactive tab with the given group color.
+func inactiveStyle(color lipgloss.Color) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Border(lipgloss.NormalBorder()).
+		BorderBottom(false).
+		BorderForeground(color).
+		Padding(0, 2)
+}
+
+// unreadStyle returns the tab style for an inactive tab that has unread lines.
+func unreadStyle(color lipgloss.Color) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("230")).
+		Border(lipgloss.NormalBorder()).
+		BorderBottom(false).
+		BorderForeground(color).
+		Padding(0, 2)
+}
 
 // --- Messages ---------------------------------------------------------------
 
@@ -83,10 +109,18 @@ type logLineAndContinue struct {
 // tabData holds per-tab state.
 type tabData struct {
 	name      string
+	group     string         // project group for color assignment
+	color     lipgloss.Color // color derived from group
 	lines     []string
 	viewport  viewport.Model
 	follow    bool // auto-scroll to bottom
 	hasUnread bool // new lines arrived while tab was not active
+}
+
+// TabInfo describes a single tab to be created in the viewer.
+type TabInfo struct {
+	Name  string // display label (e.g. "backend/api")
+	Group string // grouping key for color (e.g. "backend")
 }
 
 // Model is the top-level Bubble Tea model for the interactive logs viewer.
@@ -102,26 +136,39 @@ type Model struct {
 }
 
 // CmdBuilder is a function that returns an *exec.Cmd for tailing logs of a
-// given project. The viewer calls this once per tab at startup.
-type CmdBuilder func(projectName string) (*exec.Cmd, error)
+// given tab. The viewer calls this once per tab at startup. The argument is
+// the tab's Name from TabInfo.
+type CmdBuilder func(tabName string) (*exec.Cmd, error)
 
 // New creates a new Model. It does NOT start the background processes yet –
 // that happens in Init().
-func New(projectNames []string, builder CmdBuilder) (*Model, error) {
-	m := &Model{
-		tabs:    make([]tabData, len(projectNames)),
-		cmds:    make([]*exec.Cmd, len(projectNames)),
-		readers: make([]*os.File, len(projectNames)),
+func New(tabInfos []TabInfo, builder CmdBuilder) (*Model, error) {
+	// Assign a color to each unique group.
+	groupColorMap := make(map[string]lipgloss.Color)
+	colorIdx := 0
+	for _, ti := range tabInfos {
+		if _, ok := groupColorMap[ti.Group]; !ok {
+			groupColorMap[ti.Group] = groupColors[colorIdx%len(groupColors)]
+			colorIdx++
+		}
 	}
 
-	for i, name := range projectNames {
-		cmd, err := builder(name)
+	m := &Model{
+		tabs:    make([]tabData, len(tabInfos)),
+		cmds:    make([]*exec.Cmd, len(tabInfos)),
+		readers: make([]*os.File, len(tabInfos)),
+	}
+
+	for i, ti := range tabInfos {
+		cmd, err := builder(ti.Name)
 		if err != nil {
-			return nil, fmt.Errorf("failed to build log command for %s: %w", name, err)
+			return nil, fmt.Errorf("failed to build log command for %s: %w", ti.Name, err)
 		}
 		m.cmds[i] = cmd
 		m.tabs[i] = tabData{
-			name:   name,
+			name:   ti.Name,
+			group:  ti.Group,
+			color:  groupColorMap[ti.Group],
 			lines:  []string{},
 			follow: true,
 		}
@@ -345,15 +392,15 @@ func (m *Model) View() string {
 	for i, t := range m.tabs {
 		label := t.name
 		if i < 9 {
-			label = fmt.Sprintf("%d:%s", i+1, label)
+			label = fmt.Sprintf("%d: %s", i+1, label)
 		}
 		if i == m.active {
-			tabs = append(tabs, activeTabStyle.Render(label))
+			tabs = append(tabs, activeStyle(t.color).Render(label))
 		} else if t.hasUnread {
 			label = unreadDotStyle.Render("●") + " " + label
-			tabs = append(tabs, unreadTabStyle.Render(label))
+			tabs = append(tabs, unreadStyle(t.color).Render(label))
 		} else {
-			tabs = append(tabs, inactiveTabStyle.Render(label))
+			tabs = append(tabs, inactiveStyle(t.color).Render(label))
 		}
 	}
 	tabBar := tabBarStyle.Width(m.width).Render(lipgloss.JoinHorizontal(lipgloss.Bottom, tabs...))
@@ -386,12 +433,12 @@ func (m *Model) killAll() {
 
 // Run is a convenience function that creates a Bubble Tea program and runs
 // the model. It blocks until the user quits.
-func Run(projectNames []string, builder CmdBuilder) error {
-	if len(projectNames) == 0 {
-		return fmt.Errorf("no projects to show logs for")
+func Run(tabInfos []TabInfo, builder CmdBuilder) error {
+	if len(tabInfos) == 0 {
+		return fmt.Errorf("no tabs to show logs for")
 	}
 
-	model, err := New(projectNames, builder)
+	model, err := New(tabInfos, builder)
 	if err != nil {
 		return err
 	}

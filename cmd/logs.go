@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os/exec"
 
 	"github.com/khueue/ifrit/internal/ui"
@@ -19,8 +20,8 @@ var logsCmd = &cobra.Command{
 	Short: "View logs for one or more projects",
 	Long: `Display logs from Docker Compose projects.
 
-By default, launches an interactive TUI with one tab per project, tailing logs
-in real time. Use --no-tui to fall back to plain output.`,
+By default, launches an interactive TUI with one tab per service across all
+projects, tailing logs in real time. Use --no-tui to fall back to plain output.`,
 	Example: `  # Interactive TUI with all projects (default)
   ifrit logs
 
@@ -52,6 +53,14 @@ in real time. Use --no-tui to fall back to plain output.`,
 	},
 }
 
+// serviceTab pairs a tab label with the project/service needed to build
+// the log-tailing command.
+type serviceTab struct {
+	label       string
+	projectName string
+	serviceName string
+}
+
 func runInteractiveLogs(projects []string) error {
 	tail := logsTail
 	if tail == "all" {
@@ -60,8 +69,42 @@ func runInteractiveLogs(projects []string) error {
 		tail = "100"
 	}
 
-	return logsviewer.Run(projects, func(projectName string) (*exec.Cmd, error) {
-		return manager.ComposeLogsCmd(projectName, tail)
+	// Expand each project into one tab per service.
+	var tabs []serviceTab
+	for _, projectName := range projects {
+		services, err := manager.ComposeServices(projectName)
+		if err != nil {
+			return fmt.Errorf("failed to list services for %s: %w", projectName, err)
+		}
+		for _, svc := range services {
+			tabs = append(tabs, serviceTab{
+				label:       projectName + "/" + svc,
+				projectName: projectName,
+				serviceName: svc,
+			})
+		}
+	}
+
+	if len(tabs) == 0 {
+		ui.Println("No services found.")
+		return nil
+	}
+
+	// Build TabInfo slices for the logsviewer and a lookup map so the
+	// command builder can map each tab name back to the right project/service.
+	tabInfos := make([]logsviewer.TabInfo, len(tabs))
+	tabLookup := make(map[string]serviceTab, len(tabs))
+	for i, t := range tabs {
+		tabInfos[i] = logsviewer.TabInfo{
+			Name:  t.label,
+			Group: t.projectName,
+		}
+		tabLookup[t.label] = t
+	}
+
+	return logsviewer.Run(tabInfos, func(tabName string) (*exec.Cmd, error) {
+		t := tabLookup[tabName]
+		return manager.ComposeServiceLogsCmd(t.projectName, t.serviceName, tail)
 	})
 }
 

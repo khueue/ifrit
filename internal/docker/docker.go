@@ -378,6 +378,35 @@ func (m *Manager) ComposeLogsCmd(projectName string, tail string) (*exec.Cmd, er
 	return cmd, nil
 }
 
+// ComposeServiceLogsCmd builds and returns an *exec.Cmd for tailing logs of a
+// single service within a project, without executing it. The caller is
+// responsible for managing the process lifecycle.
+func (m *Manager) ComposeServiceLogsCmd(projectName, serviceName string, tail string) (*exec.Cmd, error) {
+	project, err := m.getProject(projectName)
+	if err != nil {
+		return nil, err
+	}
+
+	baseArgs, err := m.composeArgs(project, projectName)
+	if err != nil {
+		return nil, err
+	}
+
+	args := append(baseArgs, "logs", "--follow")
+
+	if tail != "" {
+		args = append(args, "--tail", tail)
+	}
+
+	args = append(args, serviceName)
+
+	cmd := composeCommand(args...)
+	cmd.Dir = project.Path
+	cmd.Env = m.composeEnv()
+
+	return cmd, nil
+}
+
 // UpAll starts all projects in sorted order.
 func (m *Manager) UpAll(forceRecreate bool) error {
 	if err := m.EnsureNetwork(); err != nil {
