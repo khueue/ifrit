@@ -35,7 +35,7 @@ var statusCmd = &cobra.Command{
 		}
 
 		// Show shared network status.
-		ui.Printf("\n=== Network: %s ===\n", cfg.SharedNetwork)
+		ui.Printf("\n=== Network: %s ===\n", cfg.SharedNetwork())
 		if err := manager.NetworkStatus(); err != nil {
 			ui.Printf("Error checking network: %v\n", err)
 		}

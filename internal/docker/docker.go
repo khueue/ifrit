@@ -55,7 +55,7 @@ func (m *Manager) logCommand(cmd *exec.Cmd) {
 // When not in verbose mode, BUILDKIT_PROGRESS is set to "quiet" to suppress
 // noisy BuildKit output during image builds.
 func (m *Manager) composeEnv() []string {
-	env := append(os.Environ(), fmt.Sprintf("IFRIT_SHARED_NETWORK=%s", m.config.SharedNetwork))
+	env := append(os.Environ(), fmt.Sprintf("IFRIT_SHARED_NETWORK=%s", m.config.SharedNetwork()))
 	if !m.verbose {
 		env = append(env, "BUILDKIT_PROGRESS=quiet")
 	}
@@ -74,10 +74,10 @@ func (m *Manager) ensureOverrideFile() (string, error) {
   default:
     external: true
     name: %s
-`, m.config.SharedNetwork)
+`, m.config.SharedNetwork())
 
 	// Use a deterministic path so we reuse the same file across runs.
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("ifrit-network-override-%s.yml", m.config.SharedNetwork))
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("ifrit-network-override-%s.yml", m.config.SharedNetwork()))
 
 	// Skip writing if the file already has the correct content.
 	existing, err := os.ReadFile(path)
@@ -116,7 +116,7 @@ func (m *Manager) composeArgs(project config.Project, projectName string) ([]str
 		args = append(args, "--file", overridePath)
 	}
 
-	args = append(args, "--project-name", fmt.Sprintf("%s_%s", m.config.NamePrefix, projectName))
+	args = append(args, "--project-name", fmt.Sprintf("%s%s", m.config.NamePrefix, projectName))
 	return args, nil
 }
 
@@ -130,7 +130,7 @@ func (m *Manager) networkExists() (bool, error) {
 	}
 
 	for network := range strings.SplitSeq(string(output), "\n") {
-		if strings.TrimSpace(network) == m.config.SharedNetwork {
+		if strings.TrimSpace(network) == m.config.SharedNetwork() {
 			return true, nil
 		}
 	}
@@ -149,21 +149,21 @@ func (m *Manager) EnsureNetwork() error {
 	}
 	if exists {
 		if m.verbose {
-			ui.Printf("Network %s already exists\n", m.config.SharedNetwork)
+			ui.Printf("Network %s already exists\n", m.config.SharedNetwork())
 		}
 		m.networkVerified = true
 		return nil
 	}
 
 	// Create network.
-	ui.Printf("Creating shared network: %s\n", m.config.SharedNetwork)
-	cmd := exec.Command("docker", "network", "create", m.config.SharedNetwork)
+	ui.Printf("Creating shared network: %s\n", m.config.SharedNetwork())
+	cmd := exec.Command("docker", "network", "create", m.config.SharedNetwork())
 	m.logCommand(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to create network %s: %w", m.config.SharedNetwork, err)
+		return fmt.Errorf("failed to create network %s: %w", m.config.SharedNetwork(), err)
 	}
 
 	m.networkVerified = true
@@ -173,13 +173,13 @@ func (m *Manager) EnsureNetwork() error {
 // NetworkStatus runs docker network ls filtered by the shared network name,
 // printing the result directly to stdout.
 func (m *Manager) NetworkStatus() error {
-	cmd := exec.Command("docker", "network", "ls", "--filter", fmt.Sprintf("name=^%s$", m.config.SharedNetwork))
+	cmd := exec.Command("docker", "network", "ls", "--filter", fmt.Sprintf("name=^%s$", m.config.SharedNetwork()))
 	m.logCommand(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to check network %s: %w", m.config.SharedNetwork, err)
+		return fmt.Errorf("failed to check network %s: %w", m.config.SharedNetwork(), err)
 	}
 
 	return nil
@@ -195,14 +195,14 @@ func (m *Manager) RemoveNetwork() error {
 		return nil
 	}
 
-	ui.Printf("Removing shared network: %s\n", m.config.SharedNetwork)
-	cmd := exec.Command("docker", "network", "rm", m.config.SharedNetwork)
+	ui.Printf("Removing shared network: %s\n", m.config.SharedNetwork())
+	cmd := exec.Command("docker", "network", "rm", m.config.SharedNetwork())
 	m.logCommand(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		ui.Printf("Warning: failed to remove network %s: %v\n", m.config.SharedNetwork, err)
+		ui.Printf("Warning: failed to remove network %s: %v\n", m.config.SharedNetwork(), err)
 	}
 
 	return nil

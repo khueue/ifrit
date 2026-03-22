@@ -1,5 +1,4 @@
-name_prefix: ifrit
-shared_network: ifrit
+name_prefix: ex-
 implicit_networking: true
 projects:
   proj1:

@@ -24,8 +24,7 @@ var initCmd = &cobra.Command{
 		// Create sample config.
 		implicitNetworking := true
 		sampleConfig := &config.Config{
-			NamePrefix:         "myapp",
-			SharedNetwork:      "myapp_shared",
+			NamePrefix:         "myapp-",
 			ImplicitNetworking: &implicitNetworking,
 			Projects: map[string]config.Project{
 				"backend": {

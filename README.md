@@ -52,8 +52,7 @@ go install github.com/khueue/ifrit@latest
 
 2. **Edit `ifrit.yml`** to configure your projects:
    ```yaml
-   name_prefix: myapp
-   shared_network: myapp_shared
+   name_prefix: myapp-
    implicit_networking: true
 
    projects:
@@ -83,10 +82,7 @@ The `ifrit.yml` file defines your projects and shared network:
 
 ```yaml
 # Base name prefix - used as a prefix for all compose projects
-name_prefix: myapp
-
-# Shared Docker network name
-shared_network: myapp_shared
+name_prefix: myapp-
 
 # Automatically inject the shared network into all compose projects
 implicit_networking: true
@@ -107,8 +103,7 @@ projects:
 
 ### Configuration Fields
 
-- **name_prefix** (required): Base name used to prefix all Docker Compose project names
-- **shared_network** (required): Name of the shared Docker network
+- **name_prefix** (required): Prefix applied directly (with no implicit separator) to all Docker Compose project names and the shared network name. Include a trailing separator if desired (e.g., `myapp-`). The shared network is derived as `{name_prefix}shared`.
 - **implicit_networking** (required): When `true`, Ifrit automatically injects the shared network into all compose projects. When `false`, you must add the network block to each `compose.yml` manually (see below).
 - **projects**: Map of project configurations
   - **path** (required): Relative or absolute path to the project directory
@@ -121,7 +116,7 @@ The following environment variables can be used to override config values:
 | Variable | Overrides | Description |
 |---|---|---|
 | `IFRIT_NAME_PREFIX` | `name_prefix` | Override the name prefix |
-| `IFRIT_SHARED_NETWORK` | `shared_network` | Override the shared Docker network name |
+| `IFRIT_SHARED_NETWORK` | *(derived)* | Override the automatically derived shared Docker network name (defaults to `{name_prefix}shared`) |
 
 Environment variables take precedence over values in `ifrit.yml`.
 
@@ -210,9 +205,9 @@ ifrit shell --help
 
 ## How It Works
 
-1. **Shared Network**: Ifrit creates a Docker bridge network that all projects join. The network is created automatically on `ifrit up` and removed on `ifrit down`.
-2. **Project Isolation**: Each project runs as a separate Docker Compose project with its own prefix (`{name_prefix}_{project_key}`)
-3. **Networking**: When `implicit_networking: true`, Ifrit generates a compose override file and passes it as an extra `-f` flag, so your compose files don't need any network configuration. When `false`, the `IFRIT_SHARED_NETWORK` environment variable is passed to all `docker compose` commands for use in your compose files.
+1. **Shared Network**: Ifrit creates a Docker bridge network that all projects join. The network name is automatically derived from `name_prefix` as `{name_prefix}shared`. The network is created automatically on `ifrit up` and removed on `ifrit down`.
+2. **Project Isolation**: Each project runs as a separate Docker Compose project with its own prefix (`{name_prefix}{project_key}`)
+3. **Networking**: When `implicit_networking: true`, Ifrit generates a compose override file and passes it as an extra `-f` flag, so your compose files don't need any network configuration. When `false`, the `IFRIT_SHARED_NETWORK` environment variable (set to the derived network name) is passed to all `docker compose` commands for use in your compose files.
 
 ## Example Project Structure
 
@@ -336,7 +331,7 @@ Since projects use an external shared network, Docker Compose service names are 
 # database/compose.yml
 services:
   postgres:
-    container_name: myapp_database
+    container_name: myapp-database
     image: postgres:15
     ports:
       - "5432:5432"
@@ -344,50 +339,50 @@ services:
 # backend/compose.yml
 services:
   api:
-    container_name: myapp_backend
+    container_name: myapp-backend
     image: node:18
     environment:
       # Use the explicit container name from database project
-      DATABASE_URL: postgresql://myapp_database:5432/mydb
+      DATABASE_URL: postgresql://myapp-database:5432/mydb
     ports:
       - "8080:8080"
 
 # frontend/compose.yml
 services:
   web:
-    container_name: myapp_frontend
+    container_name: myapp-frontend
     image: nginx
     environment:
       # Use the explicit container name from backend project
-      API_URL: http://myapp_backend:8080
+      API_URL: http://myapp-backend:8080
 ```
 
 ### Why This Matters
 
-Without explicit container names, Docker Compose generates names automatically (like `myapp_backend_api_1`), making them hard to predict and reference.
+Without explicit container names, Docker Compose generates names automatically (like `myapp-backend-api-1`), making them hard to predict and reference.
 
 **Service names only work within the same compose.yml file:**
 - ✅ `database` → `postgres` works (same file)
 - ❌ `backend` → `postgres` fails (different projects)
-- ✅ `backend` → `myapp_database` works (explicit container name)
+- ✅ `backend` → `myapp-database` works (explicit container name)
 
 ### Best Practices
 
 1. **Always set `container_name`** for services that other projects need to access
-2. **Use a naming convention**: `{name_prefix}_{role}` (e.g., `myapp_database`, `myapp_api`)
+2. **Use a naming convention**: `{name_prefix}{role}` (e.g., `myapp-database`, `myapp-api`)
 3. **Document container names** in your ifrit.yml comments
 
 ### Quick Reference
 
 ```bash
 # Find container names on the network
-docker network inspect myapp_shared
+docker network inspect myapp-shared
 
 # Test connectivity from one container to another
 ifrit shell backend api
 # Inside container:
-ping myapp_database
-curl http://myapp_database:5432
+ping myapp-database
+curl http://myapp-database:5432
 ```
 
 ## Tips
@@ -462,7 +457,7 @@ ifrit down
 
 If the network is still lingering (e.g., from a previous crash), remove it manually:
 ```bash
-docker network rm myapp_shared
+docker network rm myapp-shared
 ```
 
 ### Services can't communicate
@@ -484,7 +479,7 @@ networks:
 
 ```bash
 docker ps
-docker network inspect myapp_shared
+docker network inspect myapp-shared
 ```
 
 ## License
