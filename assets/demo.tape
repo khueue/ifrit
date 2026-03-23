@@ -47,7 +47,7 @@ Type "ifrit shell proj1 dev"
 Sleep 300ms
 Enter
 Sleep 2s
-Type "curl http://ifrit_proj2-app-1/"
+Type "curl http://ex-proj2-app-1/"
 Sleep 300ms
 Enter
 Sleep 2s
