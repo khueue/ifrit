@@ -12,10 +12,10 @@ import (
 
 // Config represents the ifrit.yml configuration file.
 type Config struct {
-	NamePrefix             string             `yaml:"name_prefix"`
-	sharedNetworkOverride  string             `yaml:"-"`
-	ImplicitNetworking     *bool              `yaml:"implicit_networking"`
-	Projects               map[string]Project `yaml:"projects"`
+	NamePrefix            string             `yaml:"name_prefix"`
+	sharedNetworkOverride string             `yaml:"-"`
+	ImplicitNetworking    *bool              `yaml:"implicit_networking"`
+	Projects              map[string]Project `yaml:"projects"`
 }
 
 // SharedNetwork returns the shared Docker network name.

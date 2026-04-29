@@ -1,7 +1,7 @@
 __default:
 	cat Makefile
 
-.PHONY: build install clean test run help fmt fix vet check
+.PHONY: build install clean test run help fmt fix vet check nilaway
 
 # Binary name
 BINARY_NAME=ifrit
@@ -27,6 +27,9 @@ fix:
 
 vet:
 	$(GOCMD) vet ./...
+
+nilaway:
+	$(GOCMD) tool nilaway -exclude-pkgs=github.com/khueue/ifrit/cmd ./...
 
 check: fix fmt vet
 
