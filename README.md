@@ -22,7 +22,7 @@
 
 - Docker (20.10+)
 - Docker Compose V2 (plugin)
-- Go 1.26+ (for building from source)
+- Go 1.27+ (for building from source)
 
 **Note**: Ifrit requires the modern `docker compose` plugin (V2). The legacy standalone `docker-compose` (V1) is not supported.
 
