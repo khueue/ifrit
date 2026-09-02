@@ -3,13 +3,14 @@ package logsviewer
 import (
 	"bufio"
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // maxLines is the maximum number of log lines kept per tab.
@@ -19,7 +20,7 @@ const maxLines = 10000
 
 // groupColors is a palette of visually distinct ANSI 256 colors assigned to
 // project groups so that tabs belonging to the same project share a color.
-var groupColors = []lipgloss.Color{
+var groupColors = []color.Color{
 	lipgloss.Color("215"), // orange
 	lipgloss.Color("117"), // blue
 	lipgloss.Color("156"), // green
@@ -53,34 +54,34 @@ var (
 )
 
 // activeStyle returns the tab style for the active tab with the given group color.
-func activeStyle(color lipgloss.Color) lipgloss.Style {
+func activeStyle(c color.Color) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Bold(true).
-		Foreground(color).
+		Foreground(c).
 		Border(lipgloss.NormalBorder()).
 		BorderBottom(false).
-		BorderForeground(color).
+		BorderForeground(c).
 		Padding(0, 2)
 }
 
 // inactiveStyle returns the tab style for an inactive tab with the given group color.
-func inactiveStyle(color lipgloss.Color) lipgloss.Style {
+func inactiveStyle(c color.Color) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245")).
 		Border(lipgloss.NormalBorder()).
 		BorderBottom(false).
-		BorderForeground(color).
+		BorderForeground(c).
 		Padding(0, 2)
 }
 
 // unreadStyle returns the tab style for an inactive tab that has unread lines.
-func unreadStyle(color lipgloss.Color) lipgloss.Style {
+func unreadStyle(c color.Color) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("230")).
 		Border(lipgloss.NormalBorder()).
 		BorderBottom(false).
-		BorderForeground(color).
+		BorderForeground(c).
 		Padding(0, 2)
 }
 
@@ -109,8 +110,8 @@ type logLineAndContinue struct {
 // tabData holds per-tab state.
 type tabData struct {
 	name      string
-	group     string         // project group for color assignment
-	color     lipgloss.Color // color derived from group
+	group     string      // project group for color assignment
+	color     color.Color // color derived from group
 	lines     []string
 	viewport  viewport.Model
 	follow    bool // auto-scroll to bottom
@@ -144,7 +145,7 @@ type CmdBuilder func(tabName string) (*exec.Cmd, error)
 // that happens in Init().
 func New(tabInfos []TabInfo, builder CmdBuilder) (*Model, error) {
 	// Assign a color to each unique group.
-	groupColorMap := make(map[string]lipgloss.Color)
+	groupColorMap := make(map[string]color.Color)
 	colorIdx := 0
 	for _, ti := range tabInfos {
 		if _, ok := groupColorMap[ti.Group]; !ok {
@@ -222,8 +223,8 @@ func (m *Model) tailLogs(tab int, cmd *exec.Cmd) tea.Cmd {
 		if scanner.Scan() {
 			line := scanner.Text()
 			return logLineAndContinue{
-				logLineMsg: logLineMsg{tab: tab, line: line},
-				next:       continueScanning(tab, scanner, cmd, pr),
+				tab: tab, line: line,
+				next: continueScanning(tab, scanner, cmd, pr),
 			}
 		}
 
@@ -240,8 +241,8 @@ func continueScanning(tab int, scanner *bufio.Scanner, cmd *exec.Cmd, pr *os.Fil
 		if scanner.Scan() {
 			line := scanner.Text()
 			return logLineAndContinue{
-				logLineMsg: logLineMsg{tab: tab, line: line},
-				next:       continueScanning(tab, scanner, cmd, pr),
+				tab: tab, line: line,
+				next: continueScanning(tab, scanner, cmd, pr),
 			}
 		}
 		waitErr := cmd.Wait()
@@ -255,7 +256,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "q", "esc":
 			m.quitting = true
@@ -359,8 +360,12 @@ func (m *Model) initViewports() {
 	vpHeight := m.viewportHeight()
 	vpWidth := m.width
 	for i := range m.tabs {
-		m.tabs[i].viewport = viewport.New(vpWidth, vpHeight)
+		m.tabs[i].viewport = viewport.New(
+			viewport.WithWidth(vpWidth),
+			viewport.WithHeight(vpHeight),
+		)
 		m.tabs[i].viewport.MouseWheelEnabled = false
+		m.tabs[i].viewport.FillHeight = true
 		content := strings.Join(m.tabs[i].lines, "\n")
 		m.tabs[i].viewport.SetContent(content)
 		if m.tabs[i].follow {
@@ -372,38 +377,155 @@ func (m *Model) initViewports() {
 // viewportHeight returns the usable viewport height after subtracting the
 // tab bar and help line.
 func (m *Model) viewportHeight() int {
-	// 3 lines for tab bar (border top + content + border bottom) + 1 help line.
-	chrome := 4
+	chrome := m.tabBarHeight() + 1 // + help line
 	h := max(m.height-chrome, 1)
 	return h
 }
 
-// View renders the TUI.
-func (m *Model) View() string {
-	if m.quitting {
+// truncateLabel shortens a tab label that would not fit the terminal width.
+func truncateLabel(label string, maxWidth int) string {
+	if maxWidth <= 0 {
 		return ""
 	}
+	runes := []rune(label)
+	if len(runes) <= maxWidth {
+		return label
+	}
+	if maxWidth == 1 {
+		return "…"
+	}
+	return string(runes[:maxWidth-1]) + "…"
+}
+
+// renderTab renders a single tab block: a top border row plus a label row.
+//
+// The unread-dot slot is always reserved, even when there is nothing to show,
+// so that a tab's width does not change as lines arrive. Were widths to shift,
+// tabs could repack into a different number of rows and the log pane would
+// have to be resized mid-stream.
+func (m *Model) renderTab(i int) string {
+	t := m.tabs[i]
+
+	prefix := ""
+	if i < 9 {
+		prefix = fmt.Sprintf("%d: ", i+1)
+	}
+
+	dot := "  "
+	if t.hasUnread && i != m.active {
+		dot = unreadDotStyle.Render("●") + " "
+	}
+
+	// Room left for the label: terminal width less this tab's borders (2),
+	// horizontal padding (4), dot slot (2) and number prefix.
+	label := truncateLabel(t.name, m.width-8-len(prefix))
+	content := dot + prefix + label
+
+	switch {
+	case i == m.active:
+		return activeStyle(t.color).Render(content)
+	case t.hasUnread:
+		return unreadStyle(t.color).Render(content)
+	default:
+		return inactiveStyle(t.color).Render(content)
+	}
+}
+
+// tabRows packs tab indices into rows no wider than the terminal, so that
+// every tab stays visible. Rendering the tabs as one over-wide row instead
+// would let the styling wrap them and shear the border rows apart.
+func (m *Model) tabRows() [][]int {
+	rows := make([][]int, 0, len(m.tabs))
+
+	var (
+		row   []int
+		width int
+	)
+	for i := range m.tabs {
+		w := lipgloss.Width(m.renderTab(i))
+		if len(row) > 0 && width+w > m.width {
+			rows = append(rows, row)
+			row, width = nil, 0
+		}
+		row = append(row, i)
+		width += w
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// visibleTabRows returns the packed rows along with the range [start,end) that
+// fits the terminal height. Every row is shown unless the terminal is too
+// short to hold them all, in which case the rows are scrolled to keep the
+// active tab visible.
+func (m *Model) visibleTabRows() (rows [][]int, start, end int) {
+	rows = m.tabRows()
+
+	// Leave room for the bar's bottom border, at least one log line, and the
+	// help line.
+	maxRows := max((m.height-3)/2, 1)
+	if len(rows) <= maxRows {
+		return rows, 0, len(rows)
+	}
+
+	activeRow := 0
+	for i, row := range rows {
+		for _, tab := range row {
+			if tab == m.active {
+				activeRow = i
+			}
+		}
+	}
+
+	start = min(max(activeRow-maxRows/2, 0), len(rows)-maxRows)
+
+	return rows, start, start + maxRows
+}
+
+// tabBarHeight returns the rendered height of the tab bar: two lines per row
+// of tabs (top border plus label) and one for the bar's bottom border.
+func (m *Model) tabBarHeight() int {
+	_, start, end := m.visibleTabRows()
+	return 2*(end-start) + 1
+}
+
+// renderTabBar renders the tabs, wrapped over as many rows as they need.
+func (m *Model) renderTabBar() string {
+	rows, start, end := m.visibleTabRows()
+
+	lines := make([]string, 0, end-start)
+	for _, row := range rows[start:end] {
+		blocks := make([]string, 0, len(row))
+		for _, i := range row {
+			blocks = append(blocks, m.renderTab(i))
+		}
+		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Bottom, blocks...))
+	}
+
+	// Truncate before styling: a terminal too narrow for even a single tab
+	// would otherwise be wrapped by Width below, shearing the border rows.
+	bar := lipgloss.NewStyle().MaxWidth(m.width).Render(strings.Join(lines, "\n"))
+
+	return tabBarStyle.Width(m.width).Render(bar)
+}
+
+// View renders the TUI. Alt screen is declared on the view itself in
+// Bubble Tea v2 rather than passed as a program option.
+func (m *Model) View() tea.View {
+	view := tea.View{AltScreen: true}
+
+	if m.quitting {
+		return view
+	}
 	if !m.ready {
-		return "\n  Initializing…"
+		view.Content = "\n  Initializing…"
+		return view
 	}
 
 	// --- Tab bar ---
-	var tabs []string
-	for i, t := range m.tabs {
-		label := t.name
-		if i < 9 {
-			label = fmt.Sprintf("%d: %s", i+1, label)
-		}
-		if i == m.active {
-			tabs = append(tabs, activeStyle(t.color).Render(label))
-		} else if t.hasUnread {
-			label = unreadDotStyle.Render("●") + " " + label
-			tabs = append(tabs, unreadStyle(t.color).Render(label))
-		} else {
-			tabs = append(tabs, inactiveStyle(t.color).Render(label))
-		}
-	}
-	tabBar := tabBarStyle.Width(m.width).Render(lipgloss.JoinHorizontal(lipgloss.Bottom, tabs...))
+	tabBar := m.renderTabBar()
 
 	// --- Viewport ---
 	vp := m.tabs[m.active].viewport.View()
@@ -415,7 +537,12 @@ func (m *Model) View() string {
 	}
 	help := helpStyle.Render("tab/←→: switch  ↑↓/pgup/pgdn: scroll  G: follow  g: top  esc/q: quit") + followIndicator
 
-	return tabBar + "\n" + vp + "\n" + help
+	// MaxHeight guards against a terminal too short for even one row of tabs.
+	view.Content = lipgloss.NewStyle().
+		MaxHeight(m.height).
+		Render(tabBar + "\n" + vp + "\n" + help)
+
+	return view
 }
 
 // killAll kills all background log processes and closes pipe readers so that
@@ -443,7 +570,7 @@ func Run(tabInfos []TabInfo, builder CmdBuilder) error {
 		return err
 	}
 
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}

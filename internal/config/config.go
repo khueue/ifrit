@@ -100,7 +100,7 @@ func (c *Config) Save(configPath string) error {
 		configPath = ConfigFileName
 	}
 
-	data, err := yaml.Dump(c, yaml.V4)
+	data, err := yaml.Dump(c, yaml.WithV4Defaults())
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}

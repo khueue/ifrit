@@ -20,7 +20,7 @@ func (e *SilentExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
-const version = "1.0.0"
+const version = "1.0.1"
 
 var (
 	configPath string
