@@ -11,256 +11,110 @@
 ## Features
 
 - 🐳 Manage multiple Docker Compose projects from a single configuration
-- 🔗 Automatically share a common Docker network across all projects
-- 📦 Start/stop projects individually or all at once
-- 📊 View status and logs across all projects
-- 🔧 Execute commands and open shells in running containers
-- 🔄 Modern Docker Compose (V2 plugin) support
-- ⚙️ Simple YAML configuration
-
-## Requirements
-
-- Docker (20.10+)
-- Docker Compose V2 (plugin)
-- Go 1.27+ (for building from source)
-
-**Note**: Ifrit requires the modern `docker compose` plugin (V2). The legacy standalone `docker-compose` (V1) is not supported.
+- 🔗 Share one Docker network across all projects, with no changes to your compose files
+- 📦 Start and stop projects individually or all at once
+- 📊 View status, and logs in an interactive viewer with one tab per service
+- 🔧 Open shells and run commands in containers
 
 ## Installation
 
-### From Source
-
-```bash
-git clone https://github.com/khueue/ifrit.git
-cd ifrit
-make build
-sudo make install
-```
-
-### Using Go Install
+Requires Docker with the Compose V2 plugin (`docker compose`), and Go 1.27+ to build.
 
 ```bash
 go install github.com/khueue/ifrit@latest
 ```
 
+Or from source:
+
+```bash
+git clone https://github.com/khueue/ifrit.git
+cd ifrit
+sudo make install     # to /usr/local/bin
+make install-user     # or to ~/bin, no sudo
+```
+
 ## Quick Start
 
-1. **Initialize a new configuration**:
-   ```bash
-   ifrit init
-   ```
-
-2. **Edit `ifrit.yml`** to configure your projects:
-   ```yaml
-   name_prefix: myapp-
-   implicit_networking: true
-
-   projects:
-     database:
-       path: ./database
-
-     backend:
-       path: ./backend
-
-     frontend:
-       path: ./frontend
-   ```
-
-3. **Start all projects**:
-   ```bash
-   ifrit up
-   ```
-
-4. **View status**:
-   ```bash
-   ifrit status
-   ```
+```bash
+ifrit init      # create a sample ifrit.yml
+ifrit up        # start all projects
+ifrit status    # see what is running
+ifrit logs      # watch the logs
+ifrit down      # stop everything
+```
 
 ## Configuration
 
-The `ifrit.yml` file defines your projects and shared network:
+`ifrit.yml` lists your projects:
 
 ```yaml
-# Base name prefix - used as a prefix for all compose projects
 name_prefix: myapp-
-
-# Automatically inject the shared network into all compose projects
 implicit_networking: true
 
-# Define your projects
 projects:
   database:
-    path: ./database                    # Path to project directory
-    compose_files:                      # Optional, defaults to [compose.yml]
-      - compose.yml
-
+    path: ./database
   backend:
     path: ./backend
-
-  frontend:
-    path: ./frontend
+    compose_files:        # optional, defaults to [compose.yml]
+      - compose.yml
+      - compose.dev.yml
 ```
 
-### Configuration Fields
-
-- **name_prefix** (required): Prefix applied directly (with no implicit separator) to all Docker Compose project names and the shared network name. Include a trailing separator if desired (e.g., `myapp-`). The shared network is derived as `{name_prefix}shared`.
-- **implicit_networking** (required): When `true`, Ifrit automatically injects the shared network into all compose projects. When `false`, you must add the network block to each `compose.yml` manually (see below).
-- **projects**: Map of project configurations
-  - **path** (required): Path to the project directory, absolute or relative to the directory of `ifrit.yml`
-  - **compose_files** (optional): List of compose files (defaults to `[compose.yml]`)
-
-### Environment Variable Overrides
-
-The following environment variables can be used to override config values:
-
-| Variable | Overrides | Description |
+| Field | Required | Description |
 |---|---|---|
-| `IFRIT_NAME_PREFIX` | `name_prefix` | Override the name prefix |
-| `IFRIT_SHARED_NETWORK` | *(derived)* | Override the automatically derived shared Docker network name (defaults to `{name_prefix}shared`) |
+| `name_prefix` | yes | Prefix for all Compose project names (`{name_prefix}{project}`) and for the shared network (`{name_prefix}shared`). No separator is added, so include one, as in `myapp-`. |
+| `implicit_networking` | yes | When `true`, Ifrit puts every project on the shared network by itself. When `false`, you add the network to each compose file (see [Networking](#networking)). |
+| `projects.<name>.path` | yes | Project directory, absolute or relative to the directory of `ifrit.yml`. |
+| `projects.<name>.compose_files` | no | Compose files within the project directory. Defaults to `[compose.yml]`. |
 
-Environment variables take precedence over values in `ifrit.yml`.
+Two environment variables take precedence over the file: `IFRIT_NAME_PREFIX` overrides `name_prefix`, and `IFRIT_SHARED_NETWORK` overrides the derived network name.
 
 ## Commands
 
-### Project Management
-
 ```bash
-# Start all projects
-ifrit up
+# Start and stop
+ifrit up                            # all projects
+ifrit up backend frontend           # specific projects
+ifrit up --recreate backend         # rebuild images, recreate containers
+ifrit down                          # all projects; also removes the shared network
+ifrit down backend
+ifrit down --volumes backend        # also remove volumes
 
-# Start specific projects
-ifrit up backend frontend
-
-# Force-recreate all containers from scratch
-ifrit up --recreate backend
-
-# Stop all projects (also removes the shared network)
-ifrit down
-
-# Stop specific projects
-ifrit down backend frontend
-
-# Stop and remove volumes
-ifrit down --volumes backend
-```
-
-### Status and Monitoring
-
-```bash
-# Show status of all projects and the shared network
-ifrit status
-
-# Interactive log viewer, one tab per service (all projects)
-ifrit logs
-
-# Interactive log viewer for specific projects
-ifrit logs backend frontend
-
-# Plain output instead of the viewer
-ifrit logs --no-tui backend
-
-# Plain output, follow logs of a single project
-ifrit logs --no-tui -f backend
-
-# Show last 100 lines
+# Inspect
+ifrit status                        # all projects and the shared network
+ifrit logs                          # interactive viewer, one tab per service
+ifrit logs backend frontend         # viewer for specific projects
+ifrit logs --no-tui backend         # plain output
+ifrit logs --no-tui -f backend      # plain output, following (one project)
 ifrit logs --no-tui --tail 100 backend
-```
 
-> **Note:** When the output is piped or redirected, `ifrit logs` prints plain
-> output by itself, as with `--no-tui`.
-
-### Container Access
-
-```bash
-# Open an interactive shell (bash if the container has it, otherwise sh)
-ifrit shell backend api
-
-# Execute a command in a container
+# Shells and commands (starts the service if it is not running)
+ifrit shell backend api             # bash if the container has it, otherwise sh
 ifrit shell backend api -- ls -al
-
-# Run a database query
-ifrit shell database postgres -- psql -U myuser -c "SELECT version()"
-
-# Check environment variables
-ifrit shell backend api -- env
-
-# Pipe output (interactive mode is auto-detected)
+ifrit shell backend api -- "ls && echo done"
 ifrit shell backend api -- env | grep PATH
 
-# Force interactive mode on/off
-ifrit shell --interactive=false backend api -- env > output.txt
-ifrit shell --interactive=true backend api -- top
-```
-
-> **Note:** Interactive mode (TTY + stdin) is auto-detected based on whether
-> your terminal is interactive. When piping or redirecting, it automatically
-> switches to non-interactive mode. Use `--interactive` to override.
-
-### Other
-
-```bash
-# Initialize a new config file
-ifrit init
-
-# Show version
+# Other
+ifrit init                          # create a sample ifrit.yml
 ifrit version
-
-# Show help
-ifrit --help
-
-# Command-specific help
-ifrit shell --help
+ifrit <command> --help
 ```
 
-## How It Works
+Global flags: `-c, --config` for a config file other than `./ifrit.yml`, and `-v, --verbose` to print the underlying `docker` commands.
 
-1. **Shared Network**: Ifrit creates a Docker bridge network that all projects join. The network name is automatically derived from `name_prefix` as `{name_prefix}shared`. The network is created automatically on `ifrit up` and removed on `ifrit down`.
-2. **Project Isolation**: Each project runs as a separate Docker Compose project with its own prefix (`{name_prefix}{project_key}`)
-3. **Networking**: When `implicit_networking: true`, Ifrit generates a compose override file and passes it as an extra `-f` flag, so your compose files don't need any network configuration. When `false`, the `IFRIT_SHARED_NETWORK` environment variable (set to the derived network name) is passed to all `docker compose` commands for use in your compose files.
+Notes:
 
-## Example Project Structure
+- `ifrit logs` prints plain output by itself when piped or redirected, as with `--no-tui`.
+- `ifrit shell` detects whether it runs in a terminal and only then attaches stdin and a TTY. Override with `--interactive=true|false`.
+- `ifrit shell` exits with the exit status of the command it ran.
 
-```
-myapp/
-├── ifrit.yml
-├── database/
-│   ├── compose.yml
-│   └── init.sql
-├── backend/
-│   ├── compose.yml
-│   ├── Dockerfile
-│   └── src/
-└── frontend/
-    ├── compose.yml
-    ├── Dockerfile
-    └── public/
-```
+## Networking
 
-### Example Docker Compose File
+Ifrit creates a Docker network named `{name_prefix}shared` on `ifrit up`, and removes it on `ifrit down`. Each project runs as its own Compose project on that network.
 
-**backend/compose.yml** (with `implicit_networking: true` — no network block needed):
-```yaml
-services:
-  api:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - DATABASE_URL=postgresql://db:5432/mydb
+With `implicit_networking: true`, Ifrit passes a generated override file to Compose, so your compose files need no network configuration. With `false`, add this to each compose file; Ifrit sets the variable for you:
 
-  db:
-    image: postgres:15
-    environment:
-      - POSTGRES_DB=mydb
-      - POSTGRES_PASSWORD=secret
-    volumes:
-      - db_data:/var/lib/postgresql/data
-
-volumes:
-  db_data:
-```
-
-If `implicit_networking` is `false`, add the shared network to each compose file:
 ```yaml
 networks:
   default:
@@ -268,73 +122,11 @@ networks:
     name: ${IFRIT_SHARED_NETWORK}
 ```
 
-**Note**: The `version:` field is deprecated in modern Docker Compose and should be omitted.
+### Talking to other projects
 
-## Common Workflows
+All containers are on the same network, so a service can reach services in other projects by **service name**, as long as that name is unique across projects. A name used in several projects (say, `app` in each) resolves to all of them, so which one you get is not defined.
 
-### Development Workflow
-
-```bash
-# Start your services
-ifrit up
-
-# Check everything is running
-ifrit status
-
-# Work on backend - follow logs
-ifrit logs backend
-
-# Need to access a container?
-ifrit shell backend api
-
-# Stop everything
-ifrit down
-```
-
-### Working on Specific Services
-
-```bash
-# Only need the backend today?
-ifrit up backend
-
-# Stop frontend to work on it locally
-ifrit down frontend
-
-# Restart a service after changes
-ifrit down backend
-ifrit up backend
-```
-
-### Debugging
-
-```bash
-# Check what's running
-ifrit status
-
-# View recent logs
-ifrit logs --no-tui --tail 100 backend
-
-# Follow logs in real-time
-ifrit logs backend
-
-# Open shell to investigate
-ifrit shell backend api
-
-# Run specific commands in a container
-ifrit shell backend api -- ps aux
-ifrit shell backend api -- env
-ifrit shell backend api -- ls -la
-```
-
-## Network Communication
-
-When using a shared external network, **container names** (not service names) are used for DNS resolution.
-
-### Important: Use Container Names for Communication
-
-Since projects use an external shared network, Docker Compose service names are only resolvable within their own project. To communicate across projects, you **must** use container names.
-
-**Recommended approach - Set explicit container names:**
+To be unambiguous, use the **container name**. Compose generates it as `{name_prefix}{project}-{service}-1`, or you can set it yourself:
 
 ```yaml
 # database/compose.yml
@@ -342,165 +134,49 @@ services:
   postgres:
     container_name: myapp-database
     image: postgres:15
-    ports:
-      - "5432:5432"
 
 # backend/compose.yml
 services:
   api:
-    container_name: myapp-backend
     image: node:18
     environment:
-      # Use the explicit container name from database project
       DATABASE_URL: postgresql://myapp-database:5432/mydb
-    ports:
-      - "8080:8080"
-
-# frontend/compose.yml
-services:
-  web:
-    container_name: myapp-frontend
-    image: nginx
-    environment:
-      # Use the explicit container name from backend project
-      API_URL: http://myapp-backend:8080
 ```
 
-### Why This Matters
-
-Without explicit container names, Docker Compose generates names automatically (like `myapp-backend-api-1`), making them hard to predict and reference.
-
-**Service names only work within the same compose.yml file:**
-- ✅ `database` → `postgres` works (same file)
-- ❌ `backend` → `postgres` fails (different projects)
-- ✅ `backend` → `myapp-database` works (explicit container name)
-
-### Best Practices
-
-1. **Always set `container_name`** for services that other projects need to access
-2. **Use a naming convention**: `{name_prefix}{role}` (e.g., `myapp-database`, `myapp-api`)
-3. **Document container names** in your ifrit.yml comments
-
-### Quick Reference
+To see what is on the network:
 
 ```bash
-# Find container names on the network
 docker network inspect myapp-shared
-
-# Test connectivity from one container to another
-ifrit shell backend api
-# Inside container:
-ping myapp-database
-curl http://myapp-database:5432
-```
-
-## Tips
-
-1. **Quick Shell Access**: Use `ifrit shell <project> <service>` instead of remembering full `docker compose` project names
-2. **Run Commands**: Use `ifrit shell <project> <service> -- <command>` to run one-off commands
-3. **Check Version**: Run `docker compose version` to verify your installation
-
-## Building from Source
-
-```bash
-# Clone repository
-git clone https://github.com/khueue/ifrit.git
-cd ifrit
-
-# Download dependencies
-go mod download
-
-# Build
-make build
-
-# Install (requires sudo)
-sudo make install
-
-# Or install to ~/bin (no sudo)
-make install-user
-```
-
-### Build Targets
-
-```bash
-make build          # Build to bin/ifrit
-make install        # Install to /usr/local/bin (requires sudo)
-make install-user   # Install to ~/bin (no sudo)
-make clean          # Remove build artifacts
-make build-all      # Build for multiple platforms
-make test           # Run the tests (with the race detector)
-make cover          # Run the tests and fail if coverage drops below the minimum
-make check          # Fix, format and vet
 ```
 
 ## Shell Completion
 
-Generate completion scripts for your shell:
-
 ```bash
-# Bash
 ifrit completion bash > /etc/bash_completion.d/ifrit
-
-# Zsh
 ifrit completion zsh > "${fpath[1]}/_ifrit"
-
-# Fish
 ifrit completion fish > ~/.config/fish/completions/ifrit.fish
-
-# PowerShell
 ifrit completion powershell | Out-String | Invoke-Expression
 ```
 
 ## Troubleshooting
 
-### "Config file not found"
+- **Config file not found**: run from the directory holding `ifrit.yml`, or pass `-c /path/to/ifrit.yml`.
+- **Network already exists, or lingers after a crash**: `ifrit down`, and if need be `docker network rm myapp-shared`.
+- **Services cannot reach each other**: check that `implicit_networking` is `true` (or that each compose file has the network block above). If a service name exists in more than one project, address it by container name instead.
 
-Make sure `ifrit.yml` exists in the current directory or specify the path:
-```bash
-ifrit -c /path/to/ifrit.yml up
-```
-
-### "Network already exists"
-
-Stop all projects first, which will also clean up the network:
-```bash
-ifrit down
-```
-
-If the network is still lingering (e.g., from a previous crash), remove it manually:
-```bash
-docker network rm myapp-shared
-```
-
-### Services can't communicate
-
-Either enable implicit networking in `ifrit.yml`:
-```yaml
-implicit_networking: true
-```
-
-Or verify all `compose.yml` files use the external network manually:
-```yaml
-networks:
-  default:
-    external: true
-    name: ${IFRIT_SHARED_NETWORK}
-```
-
-### Check container names
+## Development
 
 ```bash
-docker ps
-docker network inspect myapp-shared
+make build      # build to bin/ifrit
+make test       # run the tests, with the race detector
+make cover      # run the tests and fail if coverage drops below the minimum
+make check      # fix, format and vet
+make build-all  # build for multiple platforms
 ```
 
 ## License
 
-MIT License - See LICENSE file
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+MIT, see [LICENSE](LICENSE). Contributions are welcome.
 
 ## Why the name?
 
