@@ -4,16 +4,20 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 
+	"github.com/khueue/ifrit/internal/docker"
 	"github.com/khueue/ifrit/internal/ui"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
 var shellInteractive bool
+
+// defaultShell opens bash where the image has it, and plain sh where it does
+// not (alpine, busybox, ...).
+var defaultShell = []string{"sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"}
 
 func isTerminal() bool {
 	return isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
@@ -53,7 +57,8 @@ var shellCmd = &cobra.Command{
 	Short: "Open a shell or execute a command in a running container",
 	Long: `Open an interactive shell or execute a command in a running container.
 
-If no command is specified, opens an interactive shell (/bin/bash or /bin/sh).
+If no command is specified, opens an interactive shell (bash if the container
+has it, otherwise sh).
 If a command is provided after '--', executes that command in the container.
 
 If the service is not already running, it will be started automatically.
@@ -142,7 +147,7 @@ are connected to a terminal. Use --interactive to override this behavior.`,
 
 		if dashIndex == -1 || len(commandArgs) == 0 {
 			// No "--" provided, or nothing after it; open an interactive shell.
-			command = []string{"/bin/bash"}
+			command = defaultShell
 		} else if len(commandArgs) == 1 {
 			// Single arg: wrap with sh -c so that shell expressions like
 			// "ls && echo done" are interpreted correctly.
@@ -152,8 +157,9 @@ are connected to a terminal. Use --interactive to override this behavior.`,
 		}
 
 		if err := manager.ComposeExec(projectName, serviceName, command, shellInteractive); err != nil {
-			if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
-				return &SilentExitError{Code: exitErr.ExitCode()}
+			// The command's own output is enough; just pass on its status.
+			if exitErr, ok := errors.AsType[*docker.ExecExitError](err); ok {
+				return &SilentExitError{Code: exitErr.Code}
 			}
 			return err
 		}

@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"github.com/khueue/ifrit/internal/config"
@@ -12,20 +14,23 @@ import (
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize a new ifrit.yml config file",
-	Long:  `Creates a sample ifrit.yml configuration file in the current directory.`,
+	Long: `Creates a sample configuration file: ifrit.yml in the current directory,
+or the file given by --config.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		configFile := "ifrit.yml"
+		configFile := configPath
 
-		// Check if config already exists.
+		// Never overwrite an existing config.
 		if _, err := os.Stat(configFile); err == nil {
 			return fmt.Errorf("config file %s already exists", configFile)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
 		}
 
 		// Create sample config.
-		implicitNetworking := true
 		sampleConfig := &config.Config{
 			NamePrefix:         "myapp-",
-			ImplicitNetworking: &implicitNetworking,
+			ImplicitNetworking: new(true),
 			Projects: map[string]config.Project{
 				"backend": {
 					Path:         "./backend",
@@ -48,7 +53,7 @@ var initCmd = &cobra.Command{
 
 		ui.Printf("Created %s\n", configFile)
 		ui.Println("\nNext steps:")
-		ui.Println("1. Edit ifrit.yml to configure your projects")
+		ui.Printf("1. Edit %s to configure your projects\n", configFile)
 		ui.Println("2. Run 'ifrit up' to start all projects")
 		ui.Println("")
 		ui.Println("Note: implicit_networking is enabled, so your compose.yml files")

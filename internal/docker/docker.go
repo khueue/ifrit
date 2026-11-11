@@ -1,7 +1,9 @@
+// Package docker runs Docker and Docker Compose commands for ifrit projects.
 package docker
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,12 +20,35 @@ func composeCommand(args ...string) *exec.Cmd {
 	return exec.Command("docker", slices.Concat([]string{"compose"}, args)...)
 }
 
+// outputError adds the stderr captured by cmd.Output to err: the exit status
+// alone says nothing about what went wrong.
+func outputError(err error) error {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+		if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
+			return fmt.Errorf("%w: %s", err, stderr)
+		}
+	}
+	return err
+}
+
+// ExecExitError is returned by ComposeExec when the command it ran inside the
+// container exited unsuccessfully. It is kept apart from failures to get as
+// far as running the command (no daemon, service fails to start, ...), which
+// callers will want to report rather than pass on as an exit status.
+type ExecExitError struct {
+	Code int
+}
+
+func (e *ExecExitError) Error() string {
+	return fmt.Sprintf("exit status %d", e.Code)
+}
+
 // Manager handles Docker Compose operations.
 type Manager struct {
 	config          *config.Config
 	verbose         bool
 	networkVerified bool
-	overrideFile    string // temp compose override for implicit networking
+	overrideFile    string // generated compose override for implicit networking
 }
 
 // NewManager creates a new Docker manager.
@@ -48,7 +73,7 @@ func (m *Manager) logCommand(cmd *exec.Cmd) {
 	if !m.verbose {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "\033[90m$ %s\033[0m\n", strings.Join(cmd.Args, " "))
+	ui.Debugf("%s\n", strings.Join(cmd.Args, " "))
 }
 
 // composeEnv returns the current process environment with IFRIT_SHARED_NETWORK injected.
@@ -62,27 +87,40 @@ func (m *Manager) composeEnv() []string {
 	return env
 }
 
-// ensureOverrideFile creates (once) a temp compose override file that sets the
-// default network to the shared external network. The file lives in the OS temp
-// dir and is cleaned up automatically on reboot.
+// ensureOverrideFile creates (once) a compose override file that sets the
+// default network to the shared external network.
+//
+// The file lives in the user's cache directory rather than the system temp
+// directory. Its path is predictable, so in a directory other users can write
+// to, one of them could plant a file there and have it merged into our
+// compose projects.
 func (m *Manager) ensureOverrideFile() (string, error) {
 	if m.overrideFile != "" {
 		return m.overrideFile, nil
 	}
 
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to locate a directory for the network override file: %w", err)
+	}
+	dir := filepath.Join(cacheDir, "ifrit")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("failed to create directory for the network override file: %w", err)
+	}
+
 	content := fmt.Sprintf(`networks:
   default:
     external: true
-    name: %s
+    name: %q
 `, m.config.SharedNetwork())
 
 	// Use a deterministic path so we reuse the same file across runs.
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("ifrit-network-override-%s.yml", m.config.SharedNetwork()))
+	path := filepath.Join(dir, fmt.Sprintf("network-override-%s.yml", m.config.SharedNetwork()))
 
 	// Skip writing if the file already has the correct content.
 	existing, err := os.ReadFile(path)
 	if err != nil || string(existing) != content {
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			return "", fmt.Errorf("failed to write network override file: %w", err)
 		}
 	}
@@ -120,24 +158,19 @@ func (m *Manager) composeArgs(project config.Project, projectName string) ([]str
 	return args, nil
 }
 
-// EnsureNetwork creates the shared network if it doesn't exist.
+// networkExists reports whether the shared network exists.
 func (m *Manager) networkExists() (bool, error) {
 	cmd := exec.Command("docker", "network", "ls", "--format", "{{.Name}}")
 	m.logCommand(cmd)
 	output, err := cmd.Output()
 	if err != nil {
-		return false, fmt.Errorf("failed to list docker networks: %w", err)
+		return false, fmt.Errorf("failed to list docker networks: %w", outputError(err))
 	}
 
-	for network := range strings.SplitSeq(string(output), "\n") {
-		if strings.TrimSpace(network) == m.config.SharedNetwork() {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return slices.Contains(strings.Fields(string(output)), m.config.SharedNetwork()), nil
 }
 
+// EnsureNetwork creates the shared network if it doesn't exist.
 func (m *Manager) EnsureNetwork() error {
 	if m.networkVerified {
 		return nil
@@ -351,33 +384,6 @@ func (m *Manager) ComposeLogs(projectName string, follow bool, tail string) erro
 	return nil
 }
 
-// ComposeLogsCmd builds and returns an *exec.Cmd for tailing logs of a project
-// without executing it. The caller is responsible for managing the process
-// lifecycle. This is used by the interactive TUI logs viewer.
-func (m *Manager) ComposeLogsCmd(projectName string, tail string) (*exec.Cmd, error) {
-	project, err := m.getProject(projectName)
-	if err != nil {
-		return nil, err
-	}
-
-	baseArgs, err := m.composeArgs(project, projectName)
-	if err != nil {
-		return nil, err
-	}
-
-	args := append(baseArgs, "logs", "--follow")
-
-	if tail != "" {
-		args = append(args, "--tail", tail)
-	}
-
-	cmd := composeCommand(args...)
-	cmd.Dir = project.Path
-	cmd.Env = m.composeEnv()
-
-	return cmd, nil
-}
-
 // ComposeServiceLogsCmd builds and returns an *exec.Cmd for tailing logs of a
 // single service within a project, without executing it. The caller is
 // responsible for managing the process lifecycle.
@@ -422,16 +428,16 @@ func (m *Manager) UpAll(forceRecreate bool) error {
 	return nil
 }
 
-// DownAll stops all projects in sorted order.
+// DownAll stops all projects in sorted order. A project that fails to stop
+// does not keep the others from being stopped; all failures are reported
+// together once every project has been tried.
 func (m *Manager) DownAll(removeVolumes bool) error {
+	var errs []error
 	for _, name := range m.config.GetProjects() {
-		if err := m.ComposeDown(name, removeVolumes); err != nil {
-			// Continue stopping other projects even if one fails.
-			ui.Printf("Warning: %v\n", err)
-		}
+		errs = append(errs, m.ComposeDown(name, removeVolumes))
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // ensureServiceRunning ensures a specific service is up and running in a project.
@@ -515,6 +521,9 @@ func (m *Manager) ComposeExec(projectName, serviceName string, command []string,
 
 	m.logCommand(cmd)
 	if err := cmd.Run(); err != nil {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			return &ExecExitError{Code: exitErr.ExitCode()}
+		}
 		return fmt.Errorf("failed to exec into service %s in project %s: %w", serviceName, projectName, err)
 	}
 
@@ -541,16 +550,9 @@ func (m *Manager) ComposeServices(projectName string) ([]string, error) {
 	m.logCommand(cmd)
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to list services for project %s: %w", projectName, err)
+		return nil, fmt.Errorf("failed to list services for project %s: %w", projectName, outputError(err))
 	}
 
-	services := []string{}
-	lines := strings.SplitSeq(strings.TrimSpace(string(output)), "\n")
-	for line := range lines {
-		if line != "" {
-			services = append(services, line)
-		}
-	}
-
-	return services, nil
+	// One service name per line; names cannot contain whitespace.
+	return strings.Fields(string(output)), nil
 }

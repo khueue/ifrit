@@ -1,11 +1,17 @@
+// Package logsviewer is an interactive, tabbed viewer for the logs of several
+// long-running processes.
 package logsviewer
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"fmt"
 	"image/color"
+	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/viewport"
@@ -13,8 +19,17 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// maxLines is the maximum number of log lines kept per tab.
-const maxLines = 10000
+const (
+	// maxLines is the maximum number of log lines kept per tab.
+	maxLines = 10000
+
+	// readBufferSize is the size of the buffer each process is read through.
+	// It also bounds how much output is delivered in one batch.
+	readBufferSize = 64 * 1024
+
+	// maxLineBytes is the longest log line kept in one piece.
+	maxLineBytes = 1024 * 1024
+)
 
 // --- Color palette ----------------------------------------------------------
 
@@ -87,22 +102,18 @@ func unreadStyle(c color.Color) lipgloss.Style {
 
 // --- Messages ---------------------------------------------------------------
 
-// logLineMsg delivers a single log line from a background process.
-type logLineMsg struct {
-	tab  int
-	line string
+// logLinesMsg delivers a batch of log lines from a background process, along
+// with the command that waits for the next batch.
+type logLinesMsg struct {
+	tab   int
+	lines []string
+	next  tea.Cmd
 }
 
 // processExitedMsg signals that a log-tailing process has exited.
 type processExitedMsg struct {
 	tab int
 	err error
-}
-
-// logLineAndContinue wraps a log line plus a Cmd to read the next one.
-type logLineAndContinue struct {
-	logLineMsg
-	next tea.Cmd
 }
 
 // --- Model ------------------------------------------------------------------
@@ -166,89 +177,135 @@ func New(tabInfos []TabInfo, builder CmdBuilder) (*Model, error) {
 			return nil, fmt.Errorf("failed to build log command for %s: %w", ti.Name, err)
 		}
 		m.cmds[i] = cmd
+
+		vp := viewport.New()
+		vp.MouseWheelEnabled = false
+		vp.FillHeight = true
+
 		m.tabs[i] = tabData{
-			name:   ti.Name,
-			group:  ti.Group,
-			color:  groupColorMap[ti.Group],
-			lines:  []string{},
-			follow: true,
+			name:     ti.Name,
+			group:    ti.Group,
+			color:    groupColorMap[ti.Group],
+			lines:    []string{},
+			viewport: vp,
+			follow:   true,
 		}
 	}
 
 	return m, nil
 }
 
-// Init starts background log-tailing goroutines for every tab.
+// Init starts the log-tailing process of every tab.
 func (m *Model) Init() tea.Cmd {
-	cmds := make([]tea.Cmd, 0, len(m.cmds))
-	for i, cmd := range m.cmds {
-		cmds = append(cmds, m.tailLogs(i, cmd))
+	cmds := make([]tea.Cmd, len(m.cmds))
+	for i := range m.cmds {
+		cmds[i] = m.startLogs(i)
 	}
 	return tea.Batch(cmds...)
 }
 
-// tailLogs starts the process and returns a tea.Cmd that streams lines into
-// the Bubble Tea runtime via messages.
+// startLogs starts the tab's process and returns a tea.Cmd that streams its
+// output into the Bubble Tea runtime via messages.
+//
+// The process is started right here rather than inside the returned command.
+// Commands run on goroutines of their own, while killAll runs on the main
+// one: starting up front means it never sees a half-started process, and
+// never misses one that is yet to start.
 //
 // We use os.Pipe so that both stdout and stderr write to the same pipe writer.
 // This avoids the io.MultiReader pitfall where stderr is never drained while
 // stdout is still streaming, which can deadlock the child process.
-func (m *Model) tailLogs(tab int, cmd *exec.Cmd) tea.Cmd {
-	return func() tea.Msg {
-		pr, pw, err := os.Pipe()
-		if err != nil {
-			return processExitedMsg{tab: tab, err: fmt.Errorf("pipe: %w", err)}
-		}
+func (m *Model) startLogs(tab int) tea.Cmd {
+	exited := func(err error) tea.Cmd {
+		return func() tea.Msg { return processExitedMsg{tab: tab, err: err} }
+	}
 
-		cmd.Stdout = pw
-		cmd.Stderr = pw
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return exited(fmt.Errorf("pipe: %w", err))
+	}
 
-		if err := cmd.Start(); err != nil {
-			pw.Close()
-			pr.Close()
-			return processExitedMsg{tab: tab, err: err}
-		}
+	cmd := m.cmds[tab]
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+	err = cmd.Start()
 
-		// Close the write-end in the parent process. The child holds its
-		// own copy of the fd. When the child exits, the last writer goes
-		// away and reads on pr will see EOF.
-		pw.Close()
+	// Close the write-end in the parent process. The child holds its
+	// own copy of the fd. When the child exits, the last writer goes
+	// away and reads on pr will see EOF.
+	pw.Close()
 
-		// Store the read-end so cleanup can close it if needed.
-		m.readers[tab] = pr
-
-		scanner := bufio.NewScanner(pr)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-		if scanner.Scan() {
-			line := scanner.Text()
-			return logLineAndContinue{
-				tab: tab, line: line,
-				next: continueScanning(tab, scanner, cmd, pr),
-			}
-		}
-
-		// Nothing read at all — process probably exited immediately.
-		waitErr := cmd.Wait()
+	if err != nil {
 		pr.Close()
-		return processExitedMsg{tab: tab, err: waitErr}
+		return exited(err)
+	}
+
+	// Store the read-end so cleanup can close it if needed.
+	m.readers[tab] = pr
+
+	return readLogs(tab, cmd, bufio.NewReaderSize(pr, readBufferSize))
+}
+
+// readLogs returns a tea.Cmd that waits for the next batch of lines from the
+// process, or for its exit.
+func readLogs(tab int, cmd *exec.Cmd, r *bufio.Reader) tea.Cmd {
+	return func() tea.Msg {
+		lines, err := readBatch(r)
+		if len(lines) > 0 {
+			// Whatever cut the batch short comes up again on the next read.
+			return logLinesMsg{tab: tab, lines: lines, next: readLogs(tab, cmd, r)}
+		}
+
+		// Normally the output ends because the process did. Should reading
+		// fail for another reason, do not leave the process running with
+		// nobody listening: it would block on a full pipe, and Wait with it.
+		if !errors.Is(err, io.EOF) {
+			_ = cmd.Process.Kill()
+		}
+		return processExitedMsg{tab: tab, err: cmd.Wait()}
 	}
 }
 
-// continueScanning returns a tea.Cmd that reads the next line from the scanner.
-func continueScanning(tab int, scanner *bufio.Scanner, cmd *exec.Cmd, pr *os.File) tea.Cmd {
-	return func() tea.Msg {
-		if scanner.Scan() {
-			line := scanner.Text()
-			return logLineAndContinue{
-				tab: tab, line: line,
-				next: continueScanning(tab, scanner, cmd, pr),
-			}
+// readBatch blocks until a line can be read, then returns it along with all
+// further lines that are already buffered. Delivering lines in batches keeps
+// a chatty process from costing a full refresh of the log pane per line.
+func readBatch(r *bufio.Reader) ([]string, error) {
+	var lines []string
+	for {
+		line, err := readLine(r)
+		if err != nil {
+			return lines, err
 		}
-		waitErr := cmd.Wait()
-		pr.Close()
-		return processExitedMsg{tab: tab, err: waitErr}
+		lines = append(lines, line)
+
+		// Stop where reading the next line could block.
+		if buffered, _ := r.Peek(r.Buffered()); !bytes.Contains(buffered, []byte{'\n'}) {
+			return lines, nil
+		}
 	}
+}
+
+// readLine reads a single line, without its line ending. A line too long for
+// the reader's buffer is pieced together up to maxLineBytes, and whatever
+// follows becomes a line of its own. A bufio.Scanner would instead give up on
+// such a line for good, leaving the process blocked on a pipe nobody reads.
+func readLine(r *bufio.Reader) (string, error) {
+	chunk, isPrefix, err := r.ReadLine()
+	if err != nil || !isPrefix {
+		return string(chunk), err
+	}
+
+	// chunk is only valid until the next read.
+	line := slices.Clone(chunk)
+	for isPrefix && len(line) < maxLineBytes {
+		chunk, isPrefix, err = r.ReadLine()
+		if err != nil {
+			// Deliver what we have; the error comes up again on the next read.
+			break
+		}
+		line = append(line, chunk...)
+	}
+	return string(line), nil
 }
 
 // Update handles messages.
@@ -303,36 +360,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.ready = true
-		m.initViewports()
+		m.resizeViewports()
 
-	case logLineAndContinue:
-		m.appendLine(msg.tab, msg.line)
+	case logLinesMsg:
+		m.appendLines(msg.tab, msg.lines...)
 		cmds = append(cmds, msg.next)
-
-	case logLineMsg:
-		m.appendLine(msg.tab, msg.line)
 
 	case processExitedMsg:
 		suffix := " [process exited]"
 		if msg.err != nil {
 			suffix = fmt.Sprintf(" [process exited: %v]", msg.err)
 		}
-		m.appendLine(msg.tab, suffix)
+		m.appendLines(msg.tab, suffix)
 	}
 
 	return m, tea.Batch(cmds...)
 }
 
-// appendLine adds a line to the tab and refreshes the viewport.
-func (m *Model) appendLine(tab int, line string) {
+// appendLines adds lines to the tab and refreshes the viewport.
+func (m *Model) appendLines(tab int, lines ...string) {
 	if tab < 0 || tab >= len(m.tabs) {
 		return
 	}
 	t := &m.tabs[tab]
-	t.lines = append(t.lines, line)
-	if len(t.lines) > maxLines {
+	t.lines = append(t.lines, lines...)
+	if excess := len(t.lines) - maxLines; excess > 0 {
 		// Trim oldest lines.
-		t.lines = t.lines[len(t.lines)-maxLines:]
+		t.lines = slices.Delete(t.lines, 0, excess)
+
+		// A view that is scrolled back should stay on the lines it shows,
+		// not have them slide away underneath it.
+		if !t.follow {
+			t.viewport.SetYOffset(t.viewport.YOffset() - excess)
+		}
 	}
 
 	if tab == m.active {
@@ -355,23 +415,20 @@ func (m *Model) syncViewport() {
 	}
 }
 
-// initViewports (re-)initializes all viewports to the current terminal size.
-func (m *Model) initViewports() {
-	vpHeight := m.viewportHeight()
-	vpWidth := m.width
+// resizeViewports fits all viewports to the current terminal size, keeping
+// their scroll positions.
+func (m *Model) resizeViewports() {
+	height := m.viewportHeight()
 	for i := range m.tabs {
-		m.tabs[i].viewport = viewport.New(
-			viewport.WithWidth(vpWidth),
-			viewport.WithHeight(vpHeight),
-		)
-		m.tabs[i].viewport.MouseWheelEnabled = false
-		m.tabs[i].viewport.FillHeight = true
-		content := strings.Join(m.tabs[i].lines, "\n")
-		m.tabs[i].viewport.SetContent(content)
-		if m.tabs[i].follow {
-			m.tabs[i].viewport.GotoBottom()
+		t := &m.tabs[i]
+		t.viewport.SetWidth(m.width)
+		t.viewport.SetHeight(height)
+		if !t.follow {
+			// A taller viewport may now reach past the end of the content.
+			t.viewport.SetYOffset(t.viewport.YOffset())
 		}
 	}
+	m.syncViewport()
 }
 
 // viewportHeight returns the usable viewport height after subtracting the
@@ -569,6 +626,9 @@ func Run(tabInfos []TabInfo, builder CmdBuilder) error {
 	if err != nil {
 		return err
 	}
+
+	// However the program ends, leave no log processes behind.
+	defer model.killAll()
 
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {

@@ -106,7 +106,7 @@ projects:
 - **name_prefix** (required): Prefix applied directly (with no implicit separator) to all Docker Compose project names and the shared network name. Include a trailing separator if desired (e.g., `myapp-`). The shared network is derived as `{name_prefix}shared`.
 - **implicit_networking** (required): When `true`, Ifrit automatically injects the shared network into all compose projects. When `false`, you must add the network block to each `compose.yml` manually (see below).
 - **projects**: Map of project configurations
-  - **path** (required): Relative or absolute path to the project directory
+  - **path** (required): Path to the project directory, absolute or relative to the directory of `ifrit.yml`
   - **compose_files** (optional): List of compose files (defaults to `[compose.yml]`)
 
 ### Environment Variable Overrides
@@ -150,20 +150,29 @@ ifrit down --volumes backend
 # Show status of all projects and the shared network
 ifrit status
 
-# View logs (all projects)
+# Interactive log viewer, one tab per service (all projects)
 ifrit logs
 
-# Follow logs for a specific project
-ifrit logs -f backend
+# Interactive log viewer for specific projects
+ifrit logs backend frontend
+
+# Plain output instead of the viewer
+ifrit logs --no-tui backend
+
+# Plain output, follow logs of a single project
+ifrit logs --no-tui -f backend
 
 # Show last 100 lines
-ifrit logs --tail 100 backend
+ifrit logs --no-tui --tail 100 backend
 ```
+
+> **Note:** When the output is piped or redirected, `ifrit logs` prints plain
+> output by itself, as with `--no-tui`.
 
 ### Container Access
 
 ```bash
-# Open an interactive shell
+# Open an interactive shell (bash if the container has it, otherwise sh)
 ifrit shell backend api
 
 # Execute a command in a container
@@ -273,7 +282,7 @@ ifrit up
 ifrit status
 
 # Work on backend - follow logs
-ifrit logs -f backend
+ifrit logs backend
 
 # Need to access a container?
 ifrit shell backend api
@@ -303,10 +312,10 @@ ifrit up backend
 ifrit status
 
 # View recent logs
-ifrit logs --tail 100 backend
+ifrit logs --no-tui --tail 100 backend
 
 # Follow logs in real-time
-ifrit logs -f backend
+ifrit logs backend
 
 # Open shell to investigate
 ifrit shell backend api

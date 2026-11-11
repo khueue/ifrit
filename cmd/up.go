@@ -16,8 +16,9 @@ var upCmd = &cobra.Command{
 	Long: `Start one or more Docker Compose projects. If no project names are provided,
 starts all projects.
 
-By default, images are rebuilt and orphan containers are removed.
-Use --recreate to also force-recreate all containers and their dependencies.`,
+By default, missing images are built and orphan containers are removed.
+Use --recreate to also rebuild all images and force-recreate all containers
+and their dependencies.`,
 	Example: `  # Start all projects
   ifrit up
 
@@ -48,6 +49,6 @@ Use --recreate to also force-recreate all containers and their dependencies.`,
 
 func init() {
 	upCmd.Flags().BoolVarP(&upAll, "all", "a", false, "Start all projects")
-	upCmd.Flags().BoolVar(&upRecreate, "recreate", false, "Force-recreate all containers and their dependencies")
+	upCmd.Flags().BoolVar(&upRecreate, "recreate", false, "Rebuild images and force-recreate all containers and their dependencies")
 	rootCmd.AddCommand(upCmd)
 }

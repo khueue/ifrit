@@ -68,7 +68,7 @@ clean:
 # Run tests
 test:
 	@ echo "Running tests..."
-	$(GOTEST) -v ./...
+	$(GOTEST) -race ./...
 
 # Download dependencies
 deps:
@@ -84,7 +84,7 @@ tidy:
 # Upgrade all dependencies (including major versions)
 upgrade:
 	@ echo "Upgrading dependencies..."
-	$(GOGET) -u ./...
+	$(GOGET) -u ./... tool
 	$(GOMOD) tidy
 
 # Run the application (useful for development)

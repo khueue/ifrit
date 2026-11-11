@@ -35,8 +35,8 @@ func TestModelFlow(t *testing.T) {
 
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
 
-	m.Update(logLineMsg{tab: 0, line: "backend line one"})
-	m.Update(logLineMsg{tab: 1, line: "frontend line one"})
+	m.Update(logLinesMsg{tab: 0, lines: []string{"backend line one"}})
+	m.Update(logLinesMsg{tab: 1, lines: []string{"frontend line one"}})
 
 	v := m.View().Content
 	if !strings.Contains(v, "backend line one") {
@@ -152,7 +152,7 @@ func TestTabWidthStableAcrossUnread(t *testing.T) {
 	before := lipgloss.Width(m.renderTab(8))
 	rowsBefore := len(m.tabRows())
 
-	m.Update(logLineMsg{tab: 8, line: "firebase ready"})
+	m.Update(logLinesMsg{tab: 8, lines: []string{"firebase ready"}})
 	if !m.tabs[8].hasUnread {
 		t.Fatal("expected unread flag")
 	}
@@ -170,7 +170,7 @@ func TestViewFitsHeight(t *testing.T) {
 	for _, width := range []int{20, 40, 80, 130} {
 		for _, height := range []int{4, 6, 12, 20, 40} {
 			m := nineTabModel(t, width, height)
-			m.Update(logLineMsg{tab: 0, line: "dev-1  | Ready!"})
+			m.Update(logLinesMsg{tab: 0, lines: []string{"dev-1  | Ready!"}})
 			if rows := strings.Split(m.View().Content, "\n"); len(rows) != height {
 				t.Errorf("width=%d height=%d: view is %d rows, want %d",
 					width, height, len(rows), height)

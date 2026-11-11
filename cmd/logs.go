@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 
 	"github.com/khueue/ifrit/internal/ui"
 	"github.com/khueue/ifrit/internal/ui/logsviewer"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +24,8 @@ var logsCmd = &cobra.Command{
 	Long: `Display logs from Docker Compose projects.
 
 By default, launches an interactive TUI with one tab per service across all
-projects, tailing logs in real time. Use --no-tui to fall back to plain output.`,
+projects, tailing logs in real time. Use --no-tui to fall back to plain output;
+this also happens by itself when the output is piped or redirected.`,
 	Example: `  # Interactive TUI with all projects (default)
   ifrit logs
 
@@ -46,7 +50,8 @@ projects, tailing logs in real time. Use --no-tui to fall back to plain output.`
 			return nil
 		}
 
-		if logsNoTUI {
+		// The TUI needs a terminal to draw on.
+		if logsNoTUI || !isatty.IsTerminal(os.Stdout.Fd()) {
 			return runPlainLogs(projects)
 		}
 		return runInteractiveLogs(projects)
@@ -63,7 +68,7 @@ type serviceTab struct {
 
 func runInteractiveLogs(projects []string) error {
 	tail := logsTail
-	if tail == "all" {
+	if tail == "" {
 		// For the TUI, default to a reasonable number of lines so startup
 		// is fast. Users can override with --tail.
 		tail = "100"
@@ -109,6 +114,12 @@ func runInteractiveLogs(projects []string) error {
 }
 
 func runPlainLogs(projects []string) error {
+	// Following a project only ends when the project stops, so the projects
+	// after the first one would never be reached.
+	if logsFollow && len(projects) > 1 {
+		return errors.New("--follow without the TUI can only follow one project at a time; name a single project")
+	}
+
 	for i, projectName := range projects {
 		if len(projects) > 1 {
 			if i > 0 {
@@ -129,7 +140,7 @@ func runPlainLogs(projects []string) error {
 
 func init() {
 	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "Follow log output (only with --no-tui)")
-	logsCmd.Flags().StringVar(&logsTail, "tail", "all", "Number of lines to show from the end of the logs")
+	logsCmd.Flags().StringVar(&logsTail, "tail", "", "Number of lines to show from the end of the logs, or \"all\" (default: 100 in the TUI, all without it)")
 	logsCmd.Flags().BoolVar(&logsNoTUI, "no-tui", false, "Disable interactive TUI, print logs to stdout")
 	rootCmd.AddCommand(logsCmd)
 }

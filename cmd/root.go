@@ -20,7 +20,7 @@ func (e *SilentExitError) Error() string {
 	return fmt.Sprintf("exit status %d", e.Code)
 }
 
-const version = "1.0.1"
+const version = "1.0.2"
 
 var (
 	configPath string
@@ -39,9 +39,10 @@ while sharing a common network.`,
 		// Skip loading config for commands that don't need it.
 		// "__complete" is cobra's internal command for shell completion;
 		// without it, completions break when ifrit.yml is missing or invalid.
+		// Likewise "help", which must work before any config exists.
 		for c := cmd; c != nil; c = c.Parent() {
 			switch c.Name() {
-			case "init", "version", "completion", "__complete":
+			case "init", "version", "help", "completion", "__complete":
 				return nil
 			}
 		}

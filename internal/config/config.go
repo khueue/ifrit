@@ -1,6 +1,8 @@
+// Package config loads and saves the ifrit.yml configuration file.
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -34,32 +36,30 @@ type Project struct {
 	ComposeFiles []string `yaml:"compose_files,omitempty"`
 }
 
+// ConfigFileName is the default name of the configuration file.
 const ConfigFileName = "ifrit.yml"
 
-// Load reads and parses the ifrit.yml configuration file.
+// Load reads, validates and normalizes the configuration file at configPath.
+// Relative project paths are resolved against the directory of the config
+// file, so the result does not depend on where ifrit is run from.
 func Load(configPath string) (*Config, error) {
 	if configPath == "" {
 		configPath = ConfigFileName
 	}
 
-	wd, err := os.Getwd()
+	configPath, err := filepath.Abs(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get working directory: %w", err)
-	}
-
-	// Make config path absolute if relative.
-	if !filepath.IsAbs(configPath) {
-		configPath = filepath.Join(wd, configPath)
+		return nil, fmt.Errorf("failed to resolve config path: %w", err)
 	}
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file %s: %w", configPath, err)
+		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	var cfg Config
 	if err := yaml.Load(data, &cfg, yaml.WithKnownFields()); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+		return nil, fmt.Errorf("failed to parse config file %s: %w", configPath, err)
 	}
 
 	// Allow env vars to override config values.
@@ -72,22 +72,24 @@ func Load(configPath string) (*Config, error) {
 
 	// Validate required fields.
 	if cfg.NamePrefix == "" {
-		return nil, fmt.Errorf("name_prefix is required in config")
+		return nil, errors.New("name_prefix is required in config")
 	}
-
 	if cfg.ImplicitNetworking == nil {
-		return nil, fmt.Errorf("implicit_networking is required in config")
+		return nil, errors.New("implicit_networking is required in config")
 	}
 
-	for name, project := range cfg.Projects {
+	configDir := filepath.Dir(configPath)
+	for _, name := range cfg.GetProjects() {
+		project := cfg.Projects[name]
+		if project.Path == "" {
+			return nil, fmt.Errorf("path is required for project %s in config", name)
+		}
+		if !filepath.IsAbs(project.Path) {
+			project.Path = filepath.Join(configDir, project.Path)
+		}
 		if len(project.ComposeFiles) == 0 {
 			project.ComposeFiles = []string{"compose.yml"}
 		}
-
-		if project.Path != "" && !filepath.IsAbs(project.Path) {
-			project.Path = filepath.Join(wd, project.Path)
-		}
-
 		cfg.Projects[name] = project
 	}
 
