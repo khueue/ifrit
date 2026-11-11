@@ -428,6 +428,9 @@ make install        # Install to /usr/local/bin (requires sudo)
 make install-user   # Install to ~/bin (no sudo)
 make clean          # Remove build artifacts
 make build-all      # Build for multiple platforms
+make test           # Run the tests (with the race detector)
+make cover          # Run the tests and fail if coverage drops below the minimum
+make check          # Fix, format and vet
 ```
 
 ## Shell Completion

@@ -9,11 +9,18 @@ import (
 )
 
 func main() {
-	if err := cmd.Execute(); err != nil {
-		if silent, ok := errors.AsType[*cmd.SilentExitError](err); ok {
-			os.Exit(silent.Code)
-		}
-		ui.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	os.Exit(run())
+}
+
+// run executes ifrit and returns its exit code.
+func run() int {
+	err := cmd.Execute()
+	if err == nil {
+		return 0
 	}
+	if silent, ok := errors.AsType[*cmd.SilentExitError](err); ok {
+		return silent.Code
+	}
+	ui.Fprintf(os.Stderr, "Error: %v\n", err)
+	return 1
 }

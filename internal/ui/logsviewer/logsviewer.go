@@ -155,44 +155,51 @@ type CmdBuilder func(tabName string) (*exec.Cmd, error)
 // New creates a new Model. It does NOT start the background processes yet –
 // that happens in Init().
 func New(tabInfos []TabInfo, builder CmdBuilder) (*Model, error) {
-	// Assign a color to each unique group.
-	groupColorMap := make(map[string]color.Color)
-	colorIdx := 0
-	for _, ti := range tabInfos {
-		if _, ok := groupColorMap[ti.Group]; !ok {
-			groupColorMap[ti.Group] = groupColors[colorIdx%len(groupColors)]
-			colorIdx++
-		}
-	}
-
 	m := &Model{
 		tabs:    make([]tabData, len(tabInfos)),
 		cmds:    make([]*exec.Cmd, len(tabInfos)),
 		readers: make([]*os.File, len(tabInfos)),
 	}
 
+	colors := assignGroupColors(tabInfos)
 	for i, ti := range tabInfos {
 		cmd, err := builder(ti.Name)
 		if err != nil {
 			return nil, fmt.Errorf("failed to build log command for %s: %w", ti.Name, err)
 		}
 		m.cmds[i] = cmd
-
-		vp := viewport.New()
-		vp.MouseWheelEnabled = false
-		vp.FillHeight = true
-
-		m.tabs[i] = tabData{
-			name:     ti.Name,
-			group:    ti.Group,
-			color:    groupColorMap[ti.Group],
-			lines:    []string{},
-			viewport: vp,
-			follow:   true,
-		}
+		m.tabs[i] = newTab(ti, colors[ti.Group])
 	}
 
 	return m, nil
+}
+
+// assignGroupColors gives each group a color from the palette, in order of
+// first appearance.
+func assignGroupColors(tabInfos []TabInfo) map[string]color.Color {
+	colors := make(map[string]color.Color)
+	for _, ti := range tabInfos {
+		if _, ok := colors[ti.Group]; !ok {
+			colors[ti.Group] = groupColors[len(colors)%len(groupColors)]
+		}
+	}
+	return colors
+}
+
+// newTab returns an empty tab that follows its log.
+func newTab(ti TabInfo, c color.Color) tabData {
+	vp := viewport.New()
+	vp.MouseWheelEnabled = false
+	vp.FillHeight = true
+
+	return tabData{
+		name:     ti.Name,
+		group:    ti.Group,
+		color:    c,
+		lines:    []string{},
+		viewport: vp,
+		follow:   true,
+	}
 }
 
 // Init starts the log-tailing process of every tab.
@@ -310,51 +317,9 @@ func readLine(r *bufio.Reader) (string, error) {
 
 // Update handles messages.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		switch msg.String() {
-		case "ctrl+c", "q", "esc":
-			m.quitting = true
-			m.killAll()
-			return m, tea.Quit
-		case "tab", "right", "l":
-			m.active = (m.active + 1) % len(m.tabs)
-			m.tabs[m.active].hasUnread = false
-			m.syncViewport()
-		case "shift+tab", "left", "h":
-			m.active = (m.active - 1 + len(m.tabs)) % len(m.tabs)
-			m.tabs[m.active].hasUnread = false
-			m.syncViewport()
-		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-			idx := int(msg.String()[0]-'0') - 1
-			if idx < len(m.tabs) {
-				m.active = idx
-				m.tabs[m.active].hasUnread = false
-				m.syncViewport()
-			}
-		case "G", "end":
-			// Jump to bottom and re-enable follow.
-			tab := &m.tabs[m.active]
-			tab.follow = true
-			tab.viewport.GotoBottom()
-		case "g", "home":
-			// Jump to top and disable follow.
-			tab := &m.tabs[m.active]
-			tab.follow = false
-			tab.viewport.GotoTop()
-		default:
-			// Forward to viewport for scrolling (up/down/pgup/pgdn/etc).
-			tab := &m.tabs[m.active]
-			var cmd tea.Cmd
-			tab.viewport, cmd = tab.viewport.Update(msg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-			// If the user scrolled away from the bottom, disable follow.
-			tab.follow = tab.viewport.AtBottom()
-		}
+		return m, m.handleKey(msg)
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -364,7 +329,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case logLinesMsg:
 		m.appendLines(msg.tab, msg.lines...)
-		cmds = append(cmds, msg.next)
+		return m, msg.next
 
 	case processExitedMsg:
 		suffix := " [process exited]"
@@ -374,7 +339,51 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendLines(msg.tab, suffix)
 	}
 
-	return m, tea.Batch(cmds...)
+	return m, nil
+}
+
+// handleKey acts on a key press.
+func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
+	tab := &m.tabs[m.active]
+
+	switch key := msg.String(); key {
+	case "ctrl+c", "q", "esc":
+		m.quitting = true
+		m.killAll()
+		return tea.Quit
+	case "tab", "right", "l":
+		m.switchTab((m.active + 1) % len(m.tabs))
+	case "shift+tab", "left", "h":
+		m.switchTab((m.active - 1 + len(m.tabs)) % len(m.tabs))
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		m.switchTab(int(key[0]-'0') - 1)
+	case "G", "end":
+		// Jump to bottom and re-enable follow.
+		tab.follow = true
+		tab.viewport.GotoBottom()
+	case "g", "home":
+		// Jump to top and disable follow.
+		tab.follow = false
+		tab.viewport.GotoTop()
+	default:
+		// Forward to viewport for scrolling (up/down/pgup/pgdn/etc).
+		var cmd tea.Cmd
+		tab.viewport, cmd = tab.viewport.Update(msg)
+		// If the user scrolled away from the bottom, disable follow.
+		tab.follow = tab.viewport.AtBottom()
+		return cmd
+	}
+	return nil
+}
+
+// switchTab makes the tab at index active, if there is one.
+func (m *Model) switchTab(index int) {
+	if index >= len(m.tabs) {
+		return
+	}
+	m.active = index
+	m.tabs[index].hasUnread = false
+	m.syncViewport()
 }
 
 // appendLines adds lines to the tab and refreshes the viewport.

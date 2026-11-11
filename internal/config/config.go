@@ -62,38 +62,53 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config file %s: %w", configPath, err)
 	}
 
-	// Allow env vars to override config values.
+	cfg.applyEnv()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	cfg.normalizeProjects(filepath.Dir(configPath))
+
+	return &cfg, nil
+}
+
+// applyEnv lets environment variables override config values.
+func (c *Config) applyEnv() {
 	if v := os.Getenv("IFRIT_NAME_PREFIX"); v != "" {
-		cfg.NamePrefix = v
+		c.NamePrefix = v
 	}
 	if v := os.Getenv("IFRIT_SHARED_NETWORK"); v != "" {
-		cfg.sharedNetworkOverride = v
+		c.sharedNetworkOverride = v
 	}
+}
 
-	// Validate required fields.
-	if cfg.NamePrefix == "" {
-		return nil, errors.New("name_prefix is required in config")
+// validate checks that all required fields are set.
+func (c *Config) validate() error {
+	if c.NamePrefix == "" {
+		return errors.New("name_prefix is required in config")
 	}
-	if cfg.ImplicitNetworking == nil {
-		return nil, errors.New("implicit_networking is required in config")
+	if c.ImplicitNetworking == nil {
+		return errors.New("implicit_networking is required in config")
 	}
-
-	configDir := filepath.Dir(configPath)
-	for _, name := range cfg.GetProjects() {
-		project := cfg.Projects[name]
-		if project.Path == "" {
-			return nil, fmt.Errorf("path is required for project %s in config", name)
+	for _, name := range c.GetProjects() {
+		if c.Projects[name].Path == "" {
+			return fmt.Errorf("path is required for project %s in config", name)
 		}
+	}
+	return nil
+}
+
+// normalizeProjects makes project paths absolute, resolving relative ones
+// against configDir, and fills in the default compose file.
+func (c *Config) normalizeProjects(configDir string) {
+	for name, project := range c.Projects {
 		if !filepath.IsAbs(project.Path) {
 			project.Path = filepath.Join(configDir, project.Path)
 		}
 		if len(project.ComposeFiles) == 0 {
 			project.ComposeFiles = []string{"compose.yml"}
 		}
-		cfg.Projects[name] = project
+		c.Projects[name] = project
 	}
-
-	return &cfg, nil
 }
 
 // Save writes the configuration to a file.

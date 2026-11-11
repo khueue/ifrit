@@ -18,10 +18,30 @@ import (
 func TestMain(m *testing.M) {
 	fakedocker.RunIfInvoked()
 	if os.Getenv("IFRIT_TEST_RUN_MAIN") == "1" {
-		main()
-		os.Exit(0)
+		os.Exit(run())
 	}
 	os.Exit(m.Run())
+}
+
+// ifritCommand returns a command that runs ifrit. Normally that is this test
+// binary, told to act as ifrit. When "make cover" has built ifrit with
+// coverage instrumentation, that binary is run instead, so that what the
+// tests cover in ifrit's subprocesses is counted too.
+func ifritCommand(t *testing.T, args ...string) *exec.Cmd {
+	t.Helper()
+	if binary := os.Getenv("IFRIT_COVER_BINARY"); binary != "" {
+		cmd := exec.Command(binary, args...)
+		cmd.Env = append(os.Environ(), "GOCOVERDIR="+os.Getenv("IFRIT_COVER_DIR"))
+		return cmd
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.Env = append(os.Environ(), "IFRIT_TEST_RUN_MAIN=1")
+	return cmd
 }
 
 type result struct {
@@ -80,13 +100,8 @@ func (e *env) write(name, content string) {
 // ifrit sees no terminal.
 func (e *env) run(args ...string) result {
 	e.t.Helper()
-	exe, err := os.Executable()
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	cmd := exec.Command(exe, args...)
+	cmd := ifritCommand(e.t, args...)
 	cmd.Dir = e.dir
-	cmd.Env = append(os.Environ(), "IFRIT_TEST_RUN_MAIN=1")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 

@@ -2,10 +2,10 @@ package cmd
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 
+	"github.com/khueue/ifrit/internal/docker"
 	"github.com/khueue/ifrit/internal/ui"
 	"github.com/khueue/ifrit/internal/ui/logsviewer"
 	"github.com/mattn/go-isatty"
@@ -58,14 +58,6 @@ this also happens by itself when the output is piped or redirected.`,
 	},
 }
 
-// serviceTab pairs a tab label with the project/service needed to build
-// the log-tailing command.
-type serviceTab struct {
-	label       string
-	projectName string
-	serviceName string
-}
-
 func runInteractiveLogs(projects []string) error {
 	tail := logsTail
 	if tail == "" {
@@ -74,19 +66,23 @@ func runInteractiveLogs(projects []string) error {
 		tail = "100"
 	}
 
-	// Expand each project into one tab per service.
-	var tabs []serviceTab
+	// Expand each project into one tab per service, remembering the command
+	// that tails each tab's logs.
+	var tabs []logsviewer.TabInfo
+	cmds := map[string]*exec.Cmd{}
 	for _, projectName := range projects {
-		services, err := manager.ComposeServices(projectName)
+		project, err := manager.Project(projectName)
 		if err != nil {
-			return fmt.Errorf("failed to list services for %s: %w", projectName, err)
+			return err
 		}
-		for _, svc := range services {
-			tabs = append(tabs, serviceTab{
-				label:       projectName + "/" + svc,
-				projectName: projectName,
-				serviceName: svc,
-			})
+		services, err := project.Services()
+		if err != nil {
+			return err
+		}
+		for _, service := range services {
+			label := projectName + "/" + service
+			tabs = append(tabs, logsviewer.TabInfo{Name: label, Group: projectName})
+			cmds[label] = project.LogsCmd(docker.LogsOptions{Follow: true, Tail: tail, Service: service})
 		}
 	}
 
@@ -95,47 +91,41 @@ func runInteractiveLogs(projects []string) error {
 		return nil
 	}
 
-	// Build TabInfo slices for the logsviewer and a lookup map so the
-	// command builder can map each tab name back to the right project/service.
-	tabInfos := make([]logsviewer.TabInfo, len(tabs))
-	tabLookup := make(map[string]serviceTab, len(tabs))
-	for i, t := range tabs {
-		tabInfos[i] = logsviewer.TabInfo{
-			Name:  t.label,
-			Group: t.projectName,
-		}
-		tabLookup[t.label] = t
-	}
-
-	return logsviewer.Run(tabInfos, func(tabName string) (*exec.Cmd, error) {
-		t := tabLookup[tabName]
-		return manager.ComposeServiceLogsCmd(t.projectName, t.serviceName, tail)
+	return logsviewer.Run(tabs, func(tabName string) (*exec.Cmd, error) {
+		return cmds[tabName], nil
 	})
 }
 
 func runPlainLogs(projects []string) error {
+	if len(projects) == 1 {
+		return printLogs(projects[0])
+	}
+
 	// Following a project only ends when the project stops, so the projects
 	// after the first one would never be reached.
-	if logsFollow && len(projects) > 1 {
+	if logsFollow {
 		return errors.New("--follow without the TUI can only follow one project at a time; name a single project")
 	}
 
 	for i, projectName := range projects {
-		if len(projects) > 1 {
-			if i > 0 {
-				ui.Println()
-			}
-			ui.Printf("=== Logs: %s ===\n", projectName)
+		if i > 0 {
+			ui.Println()
 		}
-		if err := manager.ComposeLogs(projectName, logsFollow, logsTail); err != nil {
-			if len(projects) > 1 {
-				ui.Printf("Error: %v\n", err)
-				continue
-			}
-			return err
+		ui.Printf("=== Logs: %s ===\n", projectName)
+		if err := printLogs(projectName); err != nil {
+			ui.Printf("Error: %v\n", err)
 		}
 	}
 	return nil
+}
+
+// printLogs prints the logs of a single project.
+func printLogs(projectName string) error {
+	project, err := manager.Project(projectName)
+	if err != nil {
+		return err
+	}
+	return project.Logs(docker.LogsOptions{Follow: logsFollow, Tail: logsTail})
 }
 
 func init() {

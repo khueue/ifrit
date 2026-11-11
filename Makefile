@@ -1,7 +1,7 @@
 __default:
 	cat Makefile
 
-.PHONY: build install clean test run help fmt fix vet check nilaway
+.PHONY: build install clean test cover run help fmt fix vet check nilaway
 
 # Binary name
 BINARY_NAME=ifrit
@@ -69,6 +69,29 @@ clean:
 test:
 	@ echo "Running tests..."
 	$(GOTEST) -race ./...
+
+# Run tests and check that enough of the code is covered by them.
+# The end-to-end tests run a coverage-instrumented build of ifrit, so that
+# the commands they exercise count as well.
+COVER_MIN=90
+COVER_DIR=$(CURDIR)/$(BUILD_DIR)/cover
+COVER_PKGS=$(shell $(GOCMD) list ./... | grep -v -e /internal/check -e /internal/fakedocker | paste -sd, -)
+
+cover:
+	@ rm -rf $(COVER_DIR) && mkdir -p $(COVER_DIR)/data
+	@ $(GOBUILD) -cover -coverpkg=$(COVER_PKGS) -o $(COVER_DIR)/ifrit
+	@ IFRIT_COVER_BINARY=$(COVER_DIR)/ifrit IFRIT_COVER_DIR=$(COVER_DIR)/data \
+		$(GOTEST) -count=1 -cover -coverpkg=$(COVER_PKGS) ./... -args -test.gocoverdir=$(COVER_DIR)/data \
+		> $(COVER_DIR)/test.log 2>&1 || { cat $(COVER_DIR)/test.log; exit 1; }
+	@ $(GOCMD) tool covdata textfmt -i=$(COVER_DIR)/data -o=$(COVER_DIR)/coverage.out
+	@ $(GOCMD) tool cover -func=$(COVER_DIR)/coverage.out | awk -v min=$(COVER_MIN) ' \
+		$$1 == "total:" { total = $$NF + 0; next } \
+		$$NF + 0 < 100 { print } \
+		END { \
+			printf "\nTotal coverage: %.1f%% (minimum: %d%%)\n", total, min; \
+			if (total < min) { print "FAIL: coverage is below the minimum"; exit 1 } \
+		}'
+	@ echo "Details: go tool cover -html=$(BUILD_DIR)/cover/coverage.out"
 
 # Download dependencies
 deps:

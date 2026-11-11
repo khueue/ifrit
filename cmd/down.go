@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/khueue/ifrit/internal/docker"
 	"github.com/khueue/ifrit/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -24,24 +25,24 @@ stops all projects.`,
   # Stop projects and remove volumes
   ifrit down --volumes backend`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 || downAll {
-			if len(cfg.GetProjects()) == 0 {
-				ui.Println("No projects defined.")
-				return nil
-			}
-			if err := manager.DownAll(downVolumes); err != nil {
-				return err
-			}
+		all := len(args) == 0 || downAll
+		projects := args
+		if all {
+			projects = cfg.GetProjects()
+		}
+		if len(projects) == 0 {
+			ui.Println("No projects defined.")
+			return nil
+		}
+
+		if err := manager.Down(projects, docker.DownOptions{RemoveVolumes: downVolumes}); err != nil {
+			return err
+		}
+
+		// With every project stopped, the shared network has no use.
+		if all {
 			return manager.RemoveNetwork()
 		}
-
-		// Stop specific projects.
-		for _, projectName := range args {
-			if err := manager.ComposeDown(projectName, downVolumes); err != nil {
-				return err
-			}
-		}
-
 		return nil
 	},
 }

@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -67,7 +66,7 @@ func composeCalls(fake *fakedocker.Fake) []string {
 func TestComposeUpCreatesNetworkOnce(t *testing.T) {
 	m, fake, _ := setup(t, false)
 
-	if err := m.UpAll(false); err != nil {
+	if err := m.Up(m.config.GetProjects(), UpOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -86,7 +85,7 @@ func TestComposeUpKeepsExistingNetwork(t *testing.T) {
 	// "t-shared-2" must not be mistaken for "t-shared".
 	t.Setenv(fakedocker.NetworksEnv, "bridge t-shared-2 t-shared host")
 
-	if err := m.ComposeUp("api", true); err != nil {
+	if err := m.Up([]string{"api"}, UpOptions{Recreate: true}); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
@@ -113,7 +112,7 @@ func fileArgs(call string) []string {
 func TestComposeFilesAndImplicitNetworking(t *testing.T) {
 	m, fake, root := setup(t, true)
 
-	check.NoError(t, m.ComposeDown("api", true))
+	check.NoError(t, m.Down([]string{"api"}, DownOptions{RemoveVolumes: true}))
 	calls := fake.Calls()
 	check.Slice(t, "calls", composeCalls(fake), []string{"compose --project-name t-api down --volumes"})
 	if len(calls) != 1 {
@@ -156,68 +155,46 @@ func TestMissingComposeFile(t *testing.T) {
 	if err := os.Remove(filepath.Join(root, "web", "compose.yml")); err != nil {
 		t.Fatal(err)
 	}
-	check.ErrorContains(t, m.ComposeStatus("web"), "compose file not found")
+	_, err := m.Project("web")
+	check.ErrorContains(t, err, "compose file not found")
 	check.Slice(t, "docker calls", fake.Calls(), nil)
 }
 
 func TestUnknownProject(t *testing.T) {
-	m, _, _ := setup(t, false)
-	for name, fn := range map[string]func() error{
-		"up":     func() error { return m.ComposeUp("nope", false) },
-		"down":   func() error { return m.ComposeDown("nope", false) },
-		"status": func() error { return m.ComposeStatus("nope") },
-		"logs":   func() error { return m.ComposeLogs("nope", false, "") },
-		"exec":   func() error { return m.ComposeExec("nope", "svc", []string{"ls"}, false) },
-	} {
-		t.Run(name, func(t *testing.T) {
-			check.ErrorContains(t, fn(), "project nope not found")
-		})
-	}
-}
+	m, fake, _ := setup(t, false)
 
-func TestComposeServices(t *testing.T) {
-	m, _, _ := setup(t, false)
+	_, err := m.Project("nope")
+	check.ErrorContains(t, err, "project nope not found")
+	check.ErrorContains(t, m.Up([]string{"api", "nope", "web"}, UpOptions{}), "project nope not found")
 
-	t.Setenv(fakedocker.ServicesEnv, "api db worker")
-	got, err := m.ComposeServices("api")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"api", "db", "worker"}; !slices.Equal(got, want) {
-		t.Errorf("services = %q, want %q", got, want)
-	}
-
-	t.Setenv(fakedocker.ServicesEnv, "")
-	got, err = m.ComposeServices("api")
-	if err != nil || len(got) != 0 {
-		t.Errorf("services = %q (%v), want none", got, err)
-	}
+	// Starting stops at the first failure.
+	check.Slice(t, "calls", composeCalls(fake), []string{
+		"network ls --format {{.Name}}",
+		"network create t-shared",
+		"compose --project-name t-api up --remove-orphans --detach",
+	})
 }
 
 // When docker fails on a command whose output we capture, its explanation
 // must make it into the error, not just the exit status.
-func TestCapturedFailuresCarryStderr(t *testing.T) {
+func TestNetworkFailureCarriesStderr(t *testing.T) {
 	m, _, _ := setup(t, false)
 
-	t.Setenv(fakedocker.FailEnv, "config --services")
-	_, err := m.ComposeServices("api")
-	check.ErrorContains(t, err, "fake docker: boom", "exit status 3")
-
 	t.Setenv(fakedocker.FailEnv, "network ls")
-	check.ErrorContains(t, m.EnsureNetwork(), "fake docker: boom")
+	check.ErrorContains(t, m.EnsureNetwork(), "fake docker: boom", "exit status 3")
 }
 
 // One project failing to stop must not keep the rest running, and must not
 // go unreported either.
-func TestDownAllContinuesAndReportsFailures(t *testing.T) {
+func TestDownContinuesAndReportsFailures(t *testing.T) {
 	m, fake, _ := setup(t, false)
 	t.Setenv(fakedocker.FailEnv, "t-api down")
 
-	check.ErrorContains(t, m.DownAll(false), "failed to stop project api")
+	check.ErrorContains(t, m.Down(m.config.GetProjects(), DownOptions{}), "failed to stop project api")
 	check.Slice(t, "calls", composeCalls(fake), []string{"compose --project-name t-api down", "compose --project-name t-web down"})
 
 	t.Setenv(fakedocker.FailEnv, "")
-	check.NoError(t, m.DownAll(false))
+	check.NoError(t, m.Down(m.config.GetProjects(), DownOptions{}))
 }
 
 func TestRemoveNetwork(t *testing.T) {
@@ -240,82 +217,31 @@ func TestRemoveNetwork(t *testing.T) {
 	}
 }
 
-func TestComposeExec(t *testing.T) {
-	m, fake, _ := setup(t, false)
-	t.Setenv(fakedocker.NetworksEnv, "t-shared")
-
-	if err := m.ComposeExec("api", "db", []string{"psql", "-c", "select 1"}, false); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"network ls --format {{.Name}}",
-		"compose --project-name t-api up --detach db",
-		"compose --project-name t-api exec --no-TTY db psql -c select 1",
-	}
-	if got := composeCalls(fake); !slices.Equal(got, want) {
-		t.Errorf("calls:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-
-	fake.Reset()
-	if err := m.ComposeExec("api", "db", []string{"bash"}, true); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := composeCalls(fake), "compose --project-name t-api exec db bash"; !slices.Contains(got, want) {
-		t.Errorf("interactive calls = %q, want one to be %q", got, want)
-	}
-}
-
-// Only the exit status of the command itself is an ExecExitError. Not getting
-// as far as running it is an ordinary error, to be shown to the user.
-func TestComposeExecErrors(t *testing.T) {
-	tests := []struct {
-		name     string
-		fail     string
-		wantExit bool
-		wantErr  string
-	}{
-		{"command fails", " exec ", true, "exit status 3"},
-		{"service fails to start", "up --detach", false, "failed to start service db"},
-		{"daemon unreachable", "network ls", false, "fake docker: boom"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m, _, _ := setup(t, false)
-			t.Setenv(fakedocker.FailEnv, tt.fail)
-
-			err := m.ComposeExec("api", "db", []string{"ls"}, false)
-			check.ErrorContains(t, err, tt.wantErr)
-			_, isExit := errors.AsType[*ExecExitError](err)
-			check.Equal(t, "is ExecExitError", isExit, tt.wantExit)
-		})
-	}
-}
-
-func TestComposeLogs(t *testing.T) {
+func TestNetworkStatus(t *testing.T) {
 	m, fake, _ := setup(t, false)
 
-	if err := m.ComposeLogs("web", false, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.ComposeLogs("web", true, "50"); err != nil {
-		t.Fatal(err)
-	}
-	cmd, err := m.ComposeServiceLogsCmd("web", "nginx", "100")
-	if err != nil {
-		t.Fatal(err)
-	}
+	check.NoError(t, m.NetworkStatus())
+	check.Slice(t, "calls", fake.Calls(), []string{"network ls --filter name=^t-shared$"})
 
-	want := []string{
-		"compose --project-name t-web logs",
-		"compose --project-name t-web logs --follow --tail 50",
-	}
-	if got := composeCalls(fake); !slices.Equal(got, want) {
-		t.Errorf("calls = %q, want %q", got, want)
-	}
-	if got, want := compose(strings.Join(cmd.Args[1:], " ")), "compose --project-name t-web logs --follow --tail 100 nginx"; got != want {
-		t.Errorf("service logs cmd = %q, want %q", got, want)
-	}
-	if !slices.Contains(cmd.Env, "IFRIT_SHARED_NETWORK=t-shared") || !slices.Contains(cmd.Env, "BUILDKIT_PROGRESS=quiet") {
-		t.Error("compose env lacks IFRIT_SHARED_NETWORK or BUILDKIT_PROGRESS")
-	}
+	t.Setenv(fakedocker.FailEnv, "network ls")
+	check.ErrorContains(t, m.NetworkStatus(), "failed to check network t-shared")
+}
+
+// A network that cannot be created must stop projects from being started.
+func TestNetworkCreateFailure(t *testing.T) {
+	m, fake, _ := setup(t, false)
+	t.Setenv(fakedocker.FailEnv, "network create")
+
+	check.ErrorContains(t, m.Up([]string{"api"}, UpOptions{}), "failed to create network t-shared")
+	check.Slice(t, "calls", fake.Calls(), []string{"network ls --format {{.Name}}", "network create t-shared"})
+}
+
+// In verbose mode BuildKit is left to print its progress.
+func TestVerboseEnv(t *testing.T) {
+	m, _, _ := setup(t, false)
+	check.Equal(t, "quiet by default", slices.Contains(m.composeEnv(), "BUILDKIT_PROGRESS=quiet"), true)
+
+	verbose := NewManager(m.config, true)
+	check.Equal(t, "quiet when verbose", slices.Contains(verbose.composeEnv(), "BUILDKIT_PROGRESS=quiet"), false)
+	check.NoError(t, verbose.NetworkStatus()) // echoes the command
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/khueue/ifrit/internal/docker"
 	"github.com/khueue/ifrit/internal/ui"
 	"github.com/spf13/cobra"
 )
@@ -28,22 +29,16 @@ and their dependencies.`,
   # Force-recreate all containers from scratch
   ifrit up --recreate backend`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		projects := args
 		if len(args) == 0 || upAll {
-			if len(cfg.GetProjects()) == 0 {
-				ui.Println("No projects defined.")
-				return nil
-			}
-			return manager.UpAll(upRecreate)
+			projects = cfg.GetProjects()
+		}
+		if len(projects) == 0 {
+			ui.Println("No projects defined.")
+			return nil
 		}
 
-		// Start specific projects.
-		for _, projectName := range args {
-			if err := manager.ComposeUp(projectName, upRecreate); err != nil {
-				return err
-			}
-		}
-
-		return nil
+		return manager.Up(projects, docker.UpOptions{Recreate: upRecreate})
 	},
 }
 

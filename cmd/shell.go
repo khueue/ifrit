@@ -31,25 +31,38 @@ func printShellUsageHint() {
 	}
 
 	ui.Println("Available services:")
-
 	for _, projectName := range projects {
-		services, err := manager.ComposeServices(projectName)
-		if err != nil {
-			ui.Printf("Error listing services for %s: %v\n", projectName, err)
-			continue
-		}
-
 		ui.Printf("\n%s:\n", projectName)
-		if len(services) == 0 {
-			ui.Println("  (no services defined)")
-		} else {
-			for _, service := range services {
-				ui.Printf("  ifrit shell %s %s\n", projectName, service)
-			}
+		if err := printShellCommands(projectName); err != nil {
+			ui.Printf("Error listing services for %s: %v\n", projectName, err)
 		}
 	}
 	ui.Println()
 	ui.Println("Run 'ifrit shell --help' for full usage information.")
+}
+
+// printShellCommands prints the shell command for each service of a project.
+func printShellCommands(projectName string) error {
+	services, err := projectServices(projectName)
+	if err != nil {
+		return err
+	}
+	if len(services) == 0 {
+		ui.Println("  (no services defined)")
+	}
+	for _, service := range services {
+		ui.Printf("  ifrit shell %s %s\n", projectName, service)
+	}
+	return nil
+}
+
+// projectServices lists the services of a project.
+func projectServices(projectName string) ([]string, error) {
+	project, err := manager.Project(projectName)
+	if err != nil {
+		return nil, err
+	}
+	return project.Services()
 }
 
 var shellCmd = &cobra.Command{
@@ -127,10 +140,14 @@ are connected to a terminal. Use --interactive to override this behavior.`,
 		}
 
 		// Validate service exists in the project.
-		services, err := manager.ComposeServices(projectName)
+		project, err := manager.Project(projectName)
+		if err != nil {
+			return err
+		}
+		services, err := project.Services()
 		if err != nil {
 			printShellUsageHint()
-			return fmt.Errorf("failed to list services for %s: %w", projectName, err)
+			return err
 		}
 		if !slices.Contains(services, serviceName) {
 			ui.Printf("Service %q not found in project %q.\n\n", serviceName, projectName)
@@ -156,14 +173,12 @@ are connected to a terminal. Use --interactive to override this behavior.`,
 			command = commandArgs
 		}
 
-		if err := manager.ComposeExec(projectName, serviceName, command, shellInteractive); err != nil {
-			// The command's own output is enough; just pass on its status.
-			if exitErr, ok := errors.AsType[*docker.ExecExitError](err); ok {
-				return &SilentExitError{Code: exitErr.Code}
-			}
-			return err
+		err = project.Exec(docker.ExecOptions{Service: serviceName, Command: command, Interactive: shellInteractive})
+		// The command's own output is enough; just pass on its status.
+		if exitErr, ok := errors.AsType[*docker.ExecExitError](err); ok {
+			return &SilentExitError{Code: exitErr.Code}
 		}
-		return nil
+		return err
 	},
 }
 

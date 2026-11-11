@@ -19,17 +19,7 @@ var statusCmd = &cobra.Command{
 
 		for _, projectName := range projects {
 			ui.Printf("\n=== Project: %s ===\n", projectName)
-
-			services, err := manager.ComposeServices(projectName)
-			if err != nil {
-				ui.Printf("Error listing services: %v\n", err)
-			} else {
-				for _, service := range services {
-					ui.Printf("- %s\n", service)
-				}
-			}
-
-			if err := manager.ComposeStatus(projectName); err != nil {
+			if err := printProjectStatus(projectName); err != nil {
 				ui.Printf("Error: %v\n", err)
 			}
 		}
@@ -42,6 +32,25 @@ var statusCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+// printProjectStatus lists the project's services, followed by the state of
+// its containers.
+func printProjectStatus(projectName string) error {
+	project, err := manager.Project(projectName)
+	if err != nil {
+		return err
+	}
+
+	services, err := project.Services()
+	if err != nil {
+		ui.Printf("Error listing services: %v\n", err)
+	}
+	for _, service := range services {
+		ui.Printf("- %s\n", service)
+	}
+
+	return project.Status()
 }
 
 func init() {
